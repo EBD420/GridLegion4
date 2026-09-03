@@ -37,6 +37,7 @@ function srvReset(){
   SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={};
   SRV.online=true; SRV.requireConfirm=false; SRV.tokens={}; SRV.refreshes={};
   SRV.calls=[]; SRV.nextId=1; SRV.tableMissing=false; SRV.leakRows=false; SRV.rejectKey=false;
+  SRV.preGuildHall=false;   // tables/functions installed, but step 4 (guild-hall upgrade) never run
 }
 function lvlFor(xp){ return xp>=60000?6:xp>=30000?5:xp>=14000?4:xp>=6000?3:xp>=2000?2:1; }
 function mkSession(userId,email){
@@ -189,11 +190,18 @@ global.fetch = function(url, opts){
   }
 
   /* ---------- REST reads ---------- */
+  if(path.indexOf('/rest/v1/guilds')===0 && path.indexOf('/rest/v1/guild_members')!==0){
+    // Plain (non-embedded) guilds probe — used by the self-test to detect step 4.
+    if(SRV.preGuildHall) return res(400,{message:'column guilds.xp does not exist'});
+    return res(200, Object.values(SRV.guilds).slice(0,1).map(g=>({xp:g.xp,level:g.level})));
+  }
   if(path.indexOf('/rest/v1/guild_members')===0){
     if(!who) return res(401,{message:'not signed in'});
     const uid=who.userId;
     const gm=path.match(/guild_id=eq\.([^&]+)/);
     if(gm){
+      // The member-list query asks for role/power/depth/last_seen — columns step 4 adds.
+      if(SRV.preGuildHall) return res(400,{message:'column guild_members.role does not exist'});
       const mine=SRV.gmembers[uid];
       if(!mine || mine.guild_id!==gm[1]) return res(200,[]);   // RLS: members only
       return res(200, Object.values(SRV.gmembers).filter(m=>m.guild_id===gm[1])
@@ -201,6 +209,8 @@ global.fetch = function(url, opts){
         .map(m=>({user_id:m.user_id,display_name:m.display_name,joined_at:m.joined_at,
                   role:m.role,power:m.power,depth:m.depth,last_seen:m.last_seen})));
     }
+    // The header query embeds guilds(id,tag,name,xp,level) — xp/level are step 4 columns.
+    if(SRV.preGuildHall) return res(400,{message:'column guilds.xp does not exist'});
     const mine=SRV.gmembers[uid];
     if(!mine) return res(200,[]);
     return res(200,[{guild_id:mine.guild_id,display_name:mine.display_name,guilds:SRV.guilds[mine.guild_id]}]);

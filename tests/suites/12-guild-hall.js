@@ -129,6 +129,23 @@ let chain = cloudSignUp('leader@example.com','pw123456').then(()=>{
   ok('missing columns are defaulted', social.members.every(m=>m.role==='member' && m.power===0));
   ok('screen still renders', /MEMBERS/.test(renderGuild()));
   ok('last-seen degrades to a dash', /—/.test(renderGuild()));
+
+  console.log('\n[52] step 4 never run at all — founding a guild does not go blank');
+  return cloudSignOut().then(()=>cloudSignUp('fresh@example.com','pw123456'));
+}).then(()=>{
+  startGame(); state.profileName='Newcomer';
+  SRV.preGuildHall = true;    // steps 1+2 done, step 4 (guild levels/profiles) never run
+  social.guild=null; social.members=[]; social.guildError=''; social.status='';
+  return guildCreate('Newcomer Company','NEWC');
+}).then(r=>{
+  ok('the RPC itself still succeeds (old create_guild does not touch the new columns)', r.ok===true, r.error);
+  ok('but the guild screen does not come up blank', !social.guild, social.guild);
+  ok('a real, actionable error is recorded instead of silence', /guild-hall upgrade/i.test(social.guildError), social.guildError);
+  const html = renderGuild();
+  ok('the player sees why, not just an empty tag field', html.indexOf(social.guildError)>=0, html);
+  ok('the tag is still usable to try joining/founding again', /placeholder="RUST01"/.test(html));
+
+  SRV.preGuildHall = false;
   console.log('\n================ '+pass+' passed, '+fail+' failed ================');
   process.exit(fail?1:0);
 }).catch(e=>{ console.log('HARNESS ERROR', e); process.exit(1); });

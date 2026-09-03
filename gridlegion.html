@@ -831,9 +831,27 @@ function cloudSelfTest(){
               } else {
                 add(true, 'Multiplayer functions are installed.');
               }
-              return { lines: out, fatal:false };
+              return null;
             })
-            .catch(()=>({ lines: out, fatal:false }));
+            .catch(()=>null)
+            // 3. the guild-hall upgrade (step 4) is a separate, later migration — a project
+            // set up before it exists will pass the checks above but still show a guild
+            // with no level bar and no members list. Catch that specifically.
+            .then(()=>{
+              return cloudFetch('/rest/v1/guilds?select=xp,level&limit=1', { method:'GET' }, true)
+                .then(r3=>{
+                  const m3 = (r3.body && (r3.body.message||r3.body.hint)) || '';
+                  if(r3.status===400 && /column .* does not exist/i.test(String(m3))){
+                    add(false, 'The guild-hall upgrade has NOT been run — guild levels, member profiles and the raid members list will not show. Run step 4 of SETUP-MULTIPLAYER.md, then reload the schema.');
+                  } else if(r3.status===404 || /could not find the table/i.test(String(m3))){
+                    add(false, 'The "guilds" table is missing — run step 1 of SETUP-MULTIPLAYER.md.');
+                  } else {
+                    add(true, 'Guild-hall columns are present.');
+                  }
+                  return { lines: out, fatal:false };
+                })
+                .catch(()=>({ lines: out, fatal:false }));
+            });
         })
         .catch(() => { add(false, 'Could not reach the database endpoint.'); return { lines: out, fatal: true }; });
     });
@@ -845,7 +863,7 @@ function cloudSelfTest(){
    game never depends on any of it. See SETUP-MULTIPLAYER.md.
    ============================================================ */
 const social = { guild:null, members:[], raid:null, board:[], ladder:[], rank:null, opponent:null,
-                 status:'', busy:false, lastDuel:null };
+                 status:'', guildError:'', busy:false, lastDuel:null };
 
 /* ---- guild progression ----
    Thresholds are cumulative XP. Perks are read from the server-held level and
@@ -899,19 +917,40 @@ function restGet(path){
     .then(r => (r.ok && Array.isArray(r.body)) ? r.body : null)
     .catch(() => null);
 }
+/* Like restGet, but tells a genuine query failure (missing column/table — usually an
+   un-run migration) apart from a legitimate empty result, and turns the former into a
+   message the player can act on instead of a silent blank screen. */
+function restGetErrorText(r){
+  const msg = (r.body && (r.body.message || r.body.hint)) || ('status ' + r.status);
+  if(/column .* does not exist|could not find/i.test(String(msg))){
+    return 'Your project is missing the guild-hall upgrade — run Step 4 of SETUP-MULTIPLAYER.md (adds guild levels and member profiles), then reload the schema.';
+  }
+  return String(msg);
+}
+function restGetDiag(path){
+  return authed('/rest/v1/' + path, { method:'GET' })
+    .then(r => (r.ok && Array.isArray(r.body))
+      ? { ok:true, rows:r.body }
+      : { ok:false, rows:null, error: restGetErrorText(r) })
+    .catch(() => ({ ok:false, rows:null, error:'Could not reach the server.' }));
+}
 
 /* ---- guilds ---- */
 function guildFetch(){
   if(!signedIn()) return Promise.resolve(null);
-  return restGet('guild_members?select=guild_id,display_name,guilds(id,tag,name,xp,level)&user_id=eq.'+cloud.session.user.id)
-    .then(rows=>{
-      if(!rows || !rows.length){ social.guild=null; social.members=[]; return null; }
+  return restGetDiag('guild_members?select=guild_id,display_name,guilds(id,tag,name,xp,level)&user_id=eq.'+cloud.session.user.id)
+    .then(res1=>{
+      if(!res1.ok){ social.guild=null; social.members=[]; social.guildError=res1.error; return null; }
+      social.guildError='';
+      const rows=res1.rows;
+      if(!rows.length){ social.guild=null; social.members=[]; return null; }
       social.guild = rows[0].guilds || null;
       if(!social.guild) return null;
-      return restGet('guild_members?select=user_id,display_name,joined_at,role,power,depth,last_seen&guild_id=eq.'+social.guild.id+'&order=joined_at.asc')
-        .then(ms=>{
+      return restGetDiag('guild_members?select=user_id,display_name,joined_at,role,power,depth,last_seen&guild_id=eq.'+social.guild.id+'&order=joined_at.asc')
+        .then(res2=>{
+          if(!res2.ok){ social.members=[]; social.guildError=res2.error; return social.guild; }
           // Older rows predate the guild-hall migration; fill the gaps rather than showing blanks.
-          social.members = (ms||[]).map(m=>Object.assign({ role:'member', power:0, depth:0, last_seen:null }, m));
+          social.members = res2.rows.map(m=>Object.assign({ role:'member', power:0, depth:0, last_seen:null }, m));
           return social.guild;
         });
     });
@@ -2355,11 +2394,13 @@ function needAccountPanel(what){
 function renderGuild(){
   if(!signedIn()) return needAccountPanel('GUILD');
   const msg = social.status ? `<p style="color:var(--gold)">${escapeHtml(social.status)}</p>` : '';
+  const errMsg = social.guildError ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.guildError)}</p>` : '';
   if(!social.guild){
     return `
     <div class="panel">
       <h2 class="section">GUILD</h2>
       <p class="dim">Band together with other commanders. A guild shares a raid boss that you all chip away at between campaign runs.</p>
+      ${errMsg}
       ${msg}
       <div class="dim" style="margin-top:8px;">Join with a tag</div>
       <input id="g_tag" class="tinput" maxlength="8" placeholder="RUST01">
@@ -2408,6 +2449,7 @@ function renderGuild(){
   return `
   <div class="panel">
     <h2 class="section">${escapeHtml(social.guild.name)} <span class="dim">[${escapeHtml(social.guild.tag)}]</span></h2>
+    ${errMsg}
     <div class="row" style="align-items:baseline; gap:14px;">
       <div style="font-size:26px; color:var(--gold);">Level ${lvl||1}</div>
       <div class="dim">${social.members.length} member${social.members.length===1?'':'s'}</div>

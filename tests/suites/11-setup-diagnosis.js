@@ -45,6 +45,32 @@ let chain = cloudSignUp('setup@example.com','hunter2').then(()=>{
   return rpc('create_guild', {p_name:'Dup', p_tag:'IRON', p_display:'x'});
 }).then(r=>{
   ok('a real rejection is passed through, not masked', r.ok===false && /already in a guild/i.test(r.error), r.error);
+
+  console.log('\n[46] guild-hall migration (step 4) diagnosis');
+  SRV.preGuildHall = true;   // steps 1+2 done, step 4 (guild levels/profiles) never run
+  return cloudSelfTest();
+}).then(t=>{
+  const txt=t.lines.map(l=>l.text).join(' | ');
+  ok('self-test flags the missing guild-hall migration', /guild-hall upgrade has NOT been run/i.test(txt), txt);
+  ok('it points at the exact step', /step 4/i.test(txt) && /SETUP-MULTIPLAYER/.test(txt), txt);
+  ok('the earlier checks still pass', /functions are installed/i.test(txt), txt);
+
+  /* the same failure, hit live through the guild screen rather than the diagnostic probe */
+  social.guild=null; social.members=[]; social.guildError='';
+  return guildFetch();
+}).then(()=>{
+  ok('guildFetch does not silently give up', social.guildError, social.guildError);
+  ok('the error names the real cause', /guild-hall upgrade/i.test(social.guildError), social.guildError);
+  const html = renderGuild();
+  ok('the guild screen shows the warning instead of staying blank', html.indexOf(social.guildError)>=0, html);
+  ok('the join/found form is still usable underneath it', /Found guild/.test(html));
+
+  SRV.preGuildHall = false;
+  return cloudSelfTest();
+}).then(t=>{
+  const txt=t.lines.map(l=>l.text).join(' | ');
+  ok('self-test confirms the columns once migrated', /Guild-hall columns are present/i.test(txt), txt);
+
   console.log('\n================ '+pass+' passed, '+fail+' failed ================');
   process.exit(fail?1:0);
 }).catch(e=>{ console.log('HARNESS ERROR', e); process.exit(1); });
