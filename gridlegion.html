@@ -130,6 +130,44 @@
   .shield-tag{ position:absolute; top:-9px; left:50%; transform:translateX(-50%); font-size:10px; color:var(--water); background:var(--bg2); border:1px solid var(--water); padding:0 3px; white-space:nowrap; }
   .misscard{ background:var(--bg2); border:2px solid var(--border); padding:10px; width:280px; }
   .misscard.done{ border-color:var(--nature); }
+  .coach{
+    background: #1b2440; border:3px solid var(--water); border-left-width:8px;
+    padding:12px 14px; margin-bottom:14px; font-size:19px; line-height:1.45;
+    box-shadow:6px 6px 0 rgba(0,0,0,0.45);
+  }
+  .coach-title{ font-size:14px; color:var(--water); letter-spacing:1px; margin-bottom:6px; }
+  #fx{ position:fixed; inset:0; pointer-events:none; z-index:50; }
+  .floater{
+    position:absolute; transform:translate(-50%,0); font-family:'VT323',monospace;
+    font-size:26px; font-weight:bold; text-shadow:2px 2px 0 #000; white-space:nowrap;
+    animation: floatup 0.9s ease-out forwards;
+  }
+  .floater.dmg{ color: var(--gold); }
+  .floater.hurt{ color: var(--danger); }
+  .floater.crit{ color: #fff; font-size:34px; text-shadow:0 0 8px var(--danger), 2px 2px 0 #000; }
+  .floater.heal{ color: var(--nature); }
+  .floater.miss{ color: var(--dim); font-size:20px; }
+  @keyframes floatup{
+    0%   { opacity:0; transform:translate(-50%,6px) scale(0.7); }
+    18%  { opacity:1; transform:translate(-50%,-6px) scale(1.15); }
+    100% { opacity:0; transform:translate(-50%,-42px) scale(1); }
+  }
+  .unit.flash-hit{ animation: flashhit 0.22s steps(2,end) 2; }
+  .unit.flash-heal{ animation: flashheal 0.22s ease-out 1; }
+  @keyframes flashhit{ 0%,100%{ filter:none; } 50%{ filter:brightness(2.4) saturate(0.2); } }
+  @keyframes flashheal{ 0%,100%{ filter:none; } 50%{ filter:brightness(1.5) hue-rotate(40deg); } }
+  #app.shake{ animation: shk 0.18s linear 1; }
+  #app.shake-hard{ animation: shkh 0.32s linear 1; }
+  @keyframes shk{ 0%,100%{transform:translate(0,0);} 25%{transform:translate(-3px,2px);} 75%{transform:translate(3px,-2px);} }
+  @keyframes shkh{ 0%,100%{transform:translate(0,0);} 15%{transform:translate(-7px,3px);} 35%{transform:translate(6px,-4px);} 55%{transform:translate(-5px,-2px);} 80%{transform:translate(4px,3px);} }
+  .unit.active{ animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{ box-shadow:0 0 0 2px var(--gold) inset; } 50%{ box-shadow:0 0 0 2px var(--gold) inset, 0 0 10px rgba(255,209,102,0.45); } }
+  .hpbar-fill{ transition: width 0.35s ease-out; }
+  .audio-btn{ font-size:16px; padding:4px 8px; }
+  @media (prefers-reduced-motion: reduce){
+    .floater, .unit.flash-hit, .unit.flash-heal, #app.shake, #app.shake-hard, .unit.active{ animation:none !important; }
+    .hpbar-fill{ transition:none; }
+  }
   .membercard{ background:var(--bg2); border:2px solid var(--border); padding:10px; width:190px; }
   .membercard.me{ border-color:var(--gold); }
   .tribecard{ background:var(--bg2); border:2px solid var(--border); padding:10px; width:200px; }
@@ -176,6 +214,7 @@
 </head>
 <body>
 <div id="app"></div>
+<div id="fx"></div>
 
 <script>
 /* ============ DATA ============ */
@@ -985,6 +1024,7 @@ function serializeSave(){
     blessing: state.blessing,
     recruited: state.recruited,
     daily: state.daily,
+    audio: { sfx: audio.sfx, music: audio.music },
   };
 }
 function validateSave(d){
@@ -1040,6 +1080,10 @@ function applySave(d, slot){
     });
   }
   state.blessing = (typeof d.blessing==='string' && TRIBES[d.blessing]) ? d.blessing : null;
+  if(d.audio && typeof d.audio==='object'){
+    audio.sfx = d.audio.sfx !== false;
+    audio.music = d.audio.music === true;
+  }
   state.daily = null;
   if(d.daily && typeof d.daily==='object' && typeof d.daily.date==='string' && Array.isArray(d.daily.missions)){
     const kept = d.daily.missions.filter(m=>m && missionDef(m.id)).map(m=>({
@@ -1189,6 +1233,7 @@ let state = {
   lastFusion: null,
   confirmWipe: null,
   daily: null,
+  tutorial: null,
   duel: null,
   raidRun: false,
   favor: {},
@@ -1223,6 +1268,7 @@ function initGame(){
   state.blessing = null;
   state.recruited = {};
   state.daily = null;
+  state.tutorial = null;
   state.duel = null;
   state.raidRun = false;
   state.trial = null;
@@ -1352,6 +1398,144 @@ function formationRowSynergyLabel(row){
   return infos.length ? infos.map(synergyLabelText).join(' · ') : null;
 }
 
+/* ================= SOUND =================
+   Synthesised at runtime with the Web Audio API — no files, no CDN, the single
+   file stays single. Every entry point is guarded so headless runs are silent
+   no-ops rather than crashes.
+   ========================================= */
+const audio = { ctx:null, master:null, sfx:true, music:false, musicTimer:null, step:0, ready:false };
+
+function audioAvailable(){
+  return typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext);
+}
+/* Browsers refuse to start audio before a gesture, so this is called from clicks. */
+function audioInit(){
+  if(audio.ready || !audioAvailable()) return;
+  try{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audio.ctx = new AC();
+    audio.master = audio.ctx.createGain();
+    audio.master.gain.value = 0.28;
+    audio.master.connect(audio.ctx.destination);
+    audio.ready = true;
+  }catch(e){ audio.ready = false; }
+}
+function audioResume(){
+  if(!audio.ready) audioInit();
+  try{ if(audio.ctx && audio.ctx.state === 'suspended') audio.ctx.resume(); }catch(e){}
+}
+/* One voice: an oscillator through its own envelope. */
+function tone(freq, dur, type, vol, slideTo){
+  if(!audio.sfx || !audio.ready || !audio.ctx) return;
+  try{
+    const t = audio.ctx.currentTime;
+    const osc = audio.ctx.createOscillator();
+    const g = audio.ctx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.setValueAtTime(freq, t);
+    if(slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol || 0.2, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(g); g.connect(audio.master);
+    osc.start(t); osc.stop(t + dur + 0.02);
+  }catch(e){}
+}
+function noise(dur, vol){
+  if(!audio.sfx || !audio.ready || !audio.ctx) return;
+  try{
+    const t = audio.ctx.currentTime;
+    const n = Math.floor(audio.ctx.sampleRate * dur);
+    const buf = audio.ctx.createBuffer(1, n, audio.ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for(let i=0;i<n;i++) d[i] = (Math.random()*2-1) * (1 - i/n);
+    const src = audio.ctx.createBufferSource(); src.buffer = buf;
+    const g = audio.ctx.createGain(); g.gain.value = vol || 0.15;
+    src.connect(g); g.connect(audio.master); src.start(t);
+  }catch(e){}
+}
+const SFX = {
+  click:   ()=>tone(440, 0.05, 'square', 0.10),
+  hit:     ()=>{ noise(0.09, 0.16); tone(180, 0.08, 'square', 0.14, 90); },
+  crit:    ()=>{ noise(0.14, 0.22); tone(320, 0.16, 'sawtooth', 0.20, 120); },
+  skill:   ()=>{ tone(520, 0.10, 'square', 0.16, 880); tone(660, 0.14, 'triangle', 0.12, 1100); },
+  miss:    ()=>tone(300, 0.10, 'sine', 0.10, 180),
+  shield:  ()=>tone(700, 0.14, 'triangle', 0.16, 900),
+  faint:   ()=>tone(260, 0.35, 'sawtooth', 0.18, 60),
+  shift:   ()=>{ tone(400, 0.07, 'triangle', 0.12, 620); tone(620, 0.07, 'triangle', 0.10, 400); },
+  gauge:   ()=>{ tone(600, 0.09, 'square', 0.14); tone(900, 0.12, 'square', 0.14); },
+  glitch:  ()=>{ noise(0.16, 0.20); tone(120, 0.18, 'sawtooth', 0.16, 60); },
+  victory: ()=>[523,659,784,1047].forEach((f,i)=>setTimeout(()=>tone(f, 0.18, 'square', 0.16), i*110)),
+  defeat:  ()=>[392,330,262,196].forEach((f,i)=>setTimeout(()=>tone(f, 0.26, 'triangle', 0.16), i*150)),
+  levelup: ()=>[659,784,1047].forEach((f,i)=>setTimeout(()=>tone(f, 0.14, 'square', 0.15), i*90)),
+};
+function sfx(name){ try{ if(SFX[name]) SFX[name](); }catch(e){} }
+
+/* A slow minor arpeggio under the battle. Deliberately sparse. */
+const MUSIC_STEPS = [110,131,165,196,165,131,110,98];
+function musicStart(){
+  if(!audio.music || !audio.ready || audio.musicTimer) return;
+  audio.musicTimer = setInterval(()=>{
+    if(!audio.music){ musicStop(); return; }
+    const f = MUSIC_STEPS[audio.step % MUSIC_STEPS.length];
+    audio.step++;
+    const wasSfx = audio.sfx; audio.sfx = true;      // music ignores the SFX toggle
+    tone(f, 0.42, 'triangle', 0.055);
+    if(audio.step % 4 === 0) tone(f*2, 0.22, 'sine', 0.035);
+    audio.sfx = wasSfx;
+  }, 460);
+}
+function musicStop(){ if(audio.musicTimer){ clearInterval(audio.musicTimer); audio.musicTimer=null; } }
+function toggleSfx(){ audio.sfx = !audio.sfx; audioResume(); sfx('click'); autosave(); render(); }
+function toggleMusic(){
+  audio.music = !audio.music; audioResume();
+  if(audio.music) musicStart(); else musicStop();
+  sfx('click'); autosave(); render();
+}
+
+/* ================= BATTLE FX =================
+   render() replaces #app wholesale, so effects are queued during resolution and
+   painted afterwards into a separate overlay that survives the re-render.
+   ============================================= */
+const fxQueue = [];
+function fx(unitId, text, kind){ fxQueue.push({ unitId, text, kind }); }
+function domReady(){
+  return typeof document !== 'undefined' && typeof document.createElement === 'function'
+      && typeof document.querySelector === 'function';
+}
+function flushFx(){
+  if(!domReady()) { fxQueue.length = 0; return; }
+  const layer = document.getElementById('fx');
+  if(!layer){ fxQueue.length = 0; return; }
+  const items = fxQueue.splice(0);
+  items.forEach((it, i)=>{
+    try{
+      const host = document.querySelector('[data-unit="' + it.unitId + '"]');
+      if(!host) return;
+      const r = host.getBoundingClientRect();
+      const el = document.createElement('div');
+      el.className = 'floater ' + (it.kind || '');
+      el.textContent = it.text;
+      el.style.left = (r.left + r.width/2) + 'px';
+      el.style.top  = (r.top + 8) + 'px';
+      layer.appendChild(el);
+      setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 900);
+      host.classList.add(it.kind === 'heal' ? 'flash-heal' : 'flash-hit');
+      setTimeout(()=>{ try{ host.classList.remove('flash-hit','flash-heal'); }catch(e){} }, 220);
+    }catch(e){}
+  });
+}
+function shake(strong){
+  if(!domReady()) return;
+  try{
+    const app = document.getElementById('app');
+    if(!app || !app.classList) return;
+    const cls = strong ? 'shake-hard' : 'shake';
+    app.classList.add(cls);
+    setTimeout(()=>{ try{ app.classList.remove(cls); }catch(e){} }, strong ? 320 : 180);
+  }catch(e){}
+}
+
 /* ============ RENDER ROOT ============ */
 function render(){
   const app = document.getElementById('app');
@@ -1368,7 +1552,7 @@ function render(){
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
   else if(state.screen==='salvage') app.innerHTML = renderSalvage();
-  else if(state.screen==='battle') app.innerHTML = renderBattle();
+  else if(state.screen==='battle'){ app.innerHTML = renderBattle(); flushFx(); }
   else if(state.screen==='result') app.innerHTML = renderResult();
 }
 
@@ -1382,7 +1566,9 @@ function renderTitle(){
     <p class="dim" style="font-size:17px;">${CAMPAIGN_LENGTH} stages to break the horde — then descend into the Deep, which does not end.</p>
     <div style="margin-top:20px;">
       <button class="btn primary" onclick="goProfiles()">▶ CHOOSE YOUR LEGION</button>
+      <button class="btn" onclick="startTutorial()">🎓 TRAINING DEPLOYMENT</button>
     </div>
+    <p class="dim" style="font-size:16px;">New here? The training run takes about a minute and teaches the four things the rest of the game is built on.</p>
   </div>`;
 }
 function goProfiles(){ state.screen='profiles'; state.transfer=null; state.confirmWipe=null; render(); }
@@ -1504,6 +1690,78 @@ function importIntoSlot(){
   render();
 }
 
+/* ================= TRAINING DEPLOYMENT =================
+   A scripted first battle. It does not lecture: each step waits for the player
+   to do the thing, and the formation is rigged so the shift completes a trio.
+   ======================================================= */
+const TUTORIAL_STEPS = [
+  { id:'attack',
+    title:'Pick a target',
+    body:'Your front line takes the hits so the back line can work. Tap <b>⚔ Attack</b>, then tap an enemy.' },
+  { id:'skill',
+    title:'Spend a skill',
+    body:'Skills hit far harder and carry an elemental rider — burn, slow, stun — but then need a few turns to come back. Use yours.' },
+  { id:'shift',
+    title:'Reshape the line',
+    body:'Your front line is <b>fire, fire, water</b>. Two fire beasts is a DUO. Send the water one back with <b>🔀 Shift</b> and the fire beast behind it steps up — turning the duo into a <b>FIRE TRIO</b>, mid-battle.' },
+  { id:'gauge',
+    title:'Spend the gauge',
+    body:'The Legion Gauge fills as you deal and take damage. It spends in tiers: <b>🔧 Purge</b> at 33 clears afflictions and rust, <b>🛡 Rally</b> at 66 shields everyone, <b>⚡ Overdrive</b> at 100 has the whole legion strike at once. Spend it.' },
+];
+function tutorialActive(){ return !!state.tutorial && !state.tutorial.done; }
+function tutorialStep(){
+  if(!tutorialActive()) return null;
+  return TUTORIAL_STEPS[state.tutorial.step] || null;
+}
+/* Called after the player does something; advances if it matches the current step. */
+function tutorialSaw(what){
+  if(!tutorialActive()) return;
+  const t = state.tutorial;
+  if(!TUTORIAL_STEPS.some(st=>st.id===what)) return;
+  t.seen = t.seen || [];
+  if(t.seen.indexOf(what) < 0) t.seen.push(what);
+  // Skip over anything already done, so doing things out of order is rewarded
+  // rather than ignored — the coach just moves on to what is still unlearned.
+  const before = t.step;
+  while(t.step < TUTORIAL_STEPS.length && t.seen.indexOf(TUTORIAL_STEPS[t.step].id) >= 0) t.step++;
+  if(t.step !== before) sfx('levelup');
+  if(t.step >= TUTORIAL_STEPS.length) t.done = true;
+}
+function tutorialPanelHtml(){
+  const step = tutorialStep();
+  if(!step) return '';
+  return `<div class="coach">
+    <div class="coach-title">TRAINING · ${state.tutorial.step+1}/${TUTORIAL_STEPS.length} — ${escapeHtml(step.title)}</div>
+    <div>${step.body}</div>
+    <div style="margin-top:6px;"><span class="dim" style="cursor:pointer;" onclick="skipTutorial()">[skip training]</span></div>
+  </div>`;
+}
+function skipTutorial(){
+  if(state.tutorial) state.tutorial.done = true;
+  sfx('click');
+  render();
+}
+/* A fixed legion: two fire in front with a water beast wedged between them,
+   and a third fire waiting in the back. One shift completes the trio. */
+function startTutorial(){
+  initGame();
+  state.slot = null;
+  state.profileName = 'Training';
+  const f1 = newMonster('emberling', 4, 1, {key:'keen'});
+  const f2 = newMonster('emberling', 4, 1, {key:'savage'});
+  const w1 = newMonster('aqualing', 4, 1, {key:'stalwart'});
+  const f3 = newMonster('emberling', 4, 1, {key:'hardy'});
+  state.roster = [f1, f2, w1, f3];
+  state.formation.front = [f1.uid, w1.uid, f2.uid];
+  state.formation.back  = [f3.uid, null, null];
+  state.intel = { history:[], wins:0 };
+  state.stage = 1;
+  state.tutorial = { step:0, done:false, seen:[] };
+  state.trial = null; state.duel = null; state.raidRun = false;
+  audioResume();
+  beginBattle();
+}
+
 /* ============ RUSTBOUND ADAPTATION ============ */
 function currentAdaptation(){
   const h = state.intel.history.slice(-3);
@@ -1578,6 +1836,8 @@ function renderHub(){
     <div class="row" style="margin-top:10px; align-items:center;">
       <button class="btn small" onclick="goGuild()">🛡 Guild</button>
       <button class="btn small" onclick="goLadder()">🏆 Ladder</button>
+      <button class="btn small audio-btn" onclick="toggleSfx()">${audio.sfx?'🔊':'🔇'} SFX</button>
+      <button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>
       <button class="btn small" onclick="manualSave()">💾 Save</button>
       <button class="btn small" onclick="goTransfer()">🔗 Transfer Code</button>
       <button class="btn small" onclick="leaveToProfiles()">👥 Legions</button>
@@ -2543,6 +2803,7 @@ function pickEnemySpecies(adapted){
 
 function buildEnemyUnits(stage, terrain, adapted, usePlating, platingElem){
   platingElem = platingElem || adapted;
+  if(tutorialActive()) return buildTutorialEnemies(terrain);
   const boss = bossForStage(stage);
   if(boss) return buildBossUnits(stage, terrain, adapted, usePlating, boss, platingElem);
   const count = Math.min(3 + Math.floor((stage-1)/2), 6);
@@ -2662,6 +2923,27 @@ function buildDuelUnits(snapshot, terrain){
   return units;
 }
 
+/* Two soft targets: enough to demonstrate every verb, not enough to lose to. */
+function buildTutorialEnemies(terrain){
+  const units = [];
+  ['thornbot','scraphound'].forEach((id,i)=>{
+    const sd = ENEMY_SPECIES[id];
+    const hp = Math.round(sd.base.hp*0.75);
+    const u = Object.assign(baseUnitDefaults(), {
+      id:'e_tut'+i, side:'enemy', row:'front', speciesKey:id,
+      name:sd.name, emoji:sd.emoji, element:sd.element, elements:[sd.element],
+      attackElements:[sd.element], skillName:sd.skill,
+      bHp:hp, bAtk:Math.round(sd.base.atk*0.55), bDef:Math.round(sd.base.def*0.7), bSpd:Math.round(sd.base.spd*0.6),
+      maxHp:hp, hp:hp, atk:Math.round(sd.base.atk*0.55), def:Math.round(sd.base.def*0.7), spd:Math.round(sd.base.spd*0.6),
+      skillCd:2, skillMaxCd:4, fainted:false,
+    });
+    applyTerrainToUnit(u, terrain);
+    u.atk=u.bAtk; u.def=u.bDef; u.spd=u.bSpd; u.maxHp=u.bHp; u.hp=u.bHp;
+    units.push(u);
+  });
+  return units;
+}
+
 function beginBattle(){
   const terrain = terrainForStage(state.stage);
   const adapted = currentAdaptation();
@@ -2688,6 +2970,7 @@ function beginBattle(){
     back:  (playerUnits.find(u=>u.row==='back') ||{}).synergyLabel || null,
   };
   const bossDef = bossForStage(state.stage);
+  if(tutorialActive()){ state.battle.gauge = 30; logMsg('Training deployment: a scouting pair, lightly armed.'); }
   logMsg(bossDef ? `${bossDef.intro} (${terrain.name})`
                  : `${isEliteStage(state.stage)?'An ELITE wave':'Wave '+state.stage} approaches under ${terrain.name}!`);
   if(bossDef) logMsg(`🛡 ${bossDef.name} is shielded while any ${bossDef.genName} stands.`);
@@ -2705,6 +2988,8 @@ function beginBattle(){
     }
   }
   state.screen = 'battle';
+  audioResume();
+  if(audio.music) musicStart();
   startRound();
 }
 
@@ -2719,6 +3004,7 @@ function startRound(){
   const b = state.battle;
   if(!b || b.result) return;
   b.rounds = (b.rounds||0) + 1;
+  b.focusId = null;
   b.queue = aliveUnits().sort((a,c)=> effectiveSpd(c) - effectiveSpd(a) + (Math.random()-0.5));
   b.qIndex = 0;
   nextTurn();
@@ -2747,6 +3033,7 @@ function tickStatusStart(unit){
   if(unit.regen && !unit.fainted){
     const heal = Math.max(1, Math.round(unit.maxHp*unit.regen));
     unit.hp = Math.min(unit.maxHp, unit.hp+heal);
+    fx(unit.id, '+' + heal, 'heal');
     logMsg(`🌿 ${unit.emoji} ${unit.name} regenerates ${heal} HP.`);
   }
   if(unit.status){
@@ -2768,9 +3055,11 @@ function tickStatusStart(unit){
     if(unit.defectChance && allies.length>0 && Math.random()<unit.defectChance){
       const victim = allies[Math.floor(Math.random()*allies.length)];
       logMsg(`☢️ RUST DEFECTION! ${unit.emoji} ${unit.name}'s grafts seize control!`);
+      sfx('glitch'); shake(true);
       applyDamage(unit, victim, false);
     } else {
       logMsg(`⚙️ RUST GLITCH! ${unit.emoji} ${unit.name} locks up and loses its turn.`);
+      sfx('glitch'); fx(unit.id, 'SEIZED', 'miss');
     }
   }
   if(unit.taunt>0) unit.taunt--;
@@ -2863,10 +3152,12 @@ function chargeGauge(amount){
 function applyDamage(attacker, defender, isSkill){
   if(attacker.missChance && Math.random()<attacker.missChance){
     logMsg(`🌫️ ${attacker.emoji} ${attacker.name}'s attack is swallowed by the storm and misses!`);
+    sfx('miss'); fx(defender.id, 'MISS', 'miss');
     return;
   }
   if(defender.dodge && Math.random()<defender.dodge){
     logMsg(`💨 ${defender.emoji} ${defender.name} dodges the attack!`);
+    sfx('miss'); fx(defender.id, 'DODGE', 'miss');
     return;
   }
   const {dmg, crit, plated, strikeElem} = computeDamage(attacker, defender, isSkill);
@@ -2876,6 +3167,14 @@ function applyDamage(attacker, defender, isSkill){
   else if(defender.firstHitReduction && !defender.firstHitUsed){ defender.firstHitUsed=true; finalDmg=Math.round(finalDmg*0.5); note += ' (tide ward halves the blow)'; }
   defender.hp = Math.max(0, defender.hp-finalDmg);
   if(defender.hp<=0) defender.fainted = true;
+  if(finalDmg > 0){
+    fx(defender.id, '-' + finalDmg + (crit ? '!' : ''), crit ? 'crit' : (defender.side==='player' ? 'hurt' : 'dmg'));
+    sfx(crit ? 'crit' : (isSkill ? 'skill' : 'hit'));
+    if(crit || (defender.side==='player' && finalDmg > defender.maxHp*0.25)) shake(crit);
+  } else {
+    fx(defender.id, 'BLOCK', 'miss'); sfx('shield');
+  }
+  if(defender.fainted) sfx('faint');
   const verb = isSkill ? attacker.skillName : 'attacks';
   const dual = (attacker.attackElements && attacker.attackElements.length>1) ? ` [${strikeElem}]` : '';
   logMsg(`${attacker.emoji} ${attacker.name} ${isSkill?'uses '+verb+' on':verb} ${defender.emoji} ${defender.name}${dual} for ${finalDmg}${crit?' (CRIT!)':''}${note}${defender.fainted?' — defeated!':''}`);
@@ -2915,6 +3214,87 @@ function applyDamage(attacker, defender, isSkill){
   }
 }
 
+/* ================= RUSTBOUND TACTICS =================
+   The machines get the player's own verbs. Intelligence is tiered by stage so
+   the opening hours keep the balance they were tuned at, and the Deep fights back.
+   ===================================================== */
+const AI_BASIC = 0, AI_TACTICAL = 1, AI_COORDINATED = 2;
+function aiTier(){
+  if(state.duel) return AI_COORDINATED;            // a real player's formation deserves a real fight
+  const st = state.stage;
+  if(bossForStage(st) || isDeep(st)) return AI_COORDINATED;
+  if(st >= 4) return AI_TACTICAL;
+  return AI_BASIC;
+}
+/* Pure: no RNG, no mutation. Used for deciding, never for resolving. */
+function estimateDamage(attacker, defender, isSkill){
+  const baseAtk = isSkill ? attacker.atk*1.6 : attacker.atk;
+  let dmg = Math.max(1, Math.round(baseAtk - defender.def*0.5));
+  const m = multiplierVs(attacker, defender);
+  dmg = Math.round(dmg * m.mult);
+  if(defender.plating && m.elem===defender.plating) dmg = Math.max(1, Math.round(dmg*(1-defender.platingPct)));
+  if(attacker.baneElem){
+    const dl = (defender.elements&&defender.elements.length)?defender.elements:[defender.element];
+    if(dl.indexOf(attacker.baneElem)>=0) dmg = Math.round(dmg*1.15);
+  }
+  return dmg;
+}
+function scoreTarget(attacker, target, tier){
+  if(target.shielded) return -Infinity;              // untouchable while its pylons stand
+  const dmg = estimateDamage(attacker, target, false);
+  let s = dmg;
+  if(dmg >= target.hp) s += 500;                     // secure the kill
+  if(tier >= AI_TACTICAL){
+    s += target.atk * 2;                             // silence the dangerous one
+    if(target.synergyLabel) s += 30;                 // breaking a line is worth more than raw damage
+    s += (1 - target.hp/Math.max(1,target.maxHp)) * 40;
+    if(target.shield) s -= 25;                       // a blow into a shield is wasted
+    if(target.dodge) s -= target.dodge * 60;
+  }
+  if(tier >= AI_COORDINATED && state.battle && state.battle.focusId===target.id) s += 60;  // pile on
+  return s;
+}
+function decideSkill(unit, target, tier){
+  if(unit.skillCd > 0) return false;
+  if(tier === AI_BASIC) return Math.random() < 0.5;
+  const basic = estimateDamage(unit, target, false);
+  const skill = estimateDamage(unit, target, true);
+  if(basic >= target.hp) return false;               // a basic finishes it — hold the skill
+  if(skill >= target.hp) return true;                // the skill closes it — spend now
+  if(target.shield) return false;                    // it would be absorbed
+  return Math.random() < 0.75;
+}
+/* A wounded machine falls back behind its own line — once, and never leaving the front empty. */
+function enemyTryShift(unit){
+  const b = state.battle;
+  if(!b || unit.isBoss || unit.isGenerator) return false;
+  if(unit.row !== 'front' || unit.shiftedOnce) return false;
+  if(unit.hp / Math.max(1,unit.maxHp) > 0.3) return false;
+  const back = b.enemyUnits.filter(u=>u.row==='back' && !u.fainted);
+  const frontOthers = b.enemyUnits.filter(u=>u.row==='front' && !u.fainted && u.id!==unit.id);
+  if(frontOthers.length === 0) return false;          // never abandon the line
+
+  if(back.length >= 3){
+    // Back row full: trade with its healthiest reserve, the way the player must.
+    const relief = back.filter(u=>!u.isBoss && !u.isGenerator)
+                       .sort((a,c)=>(c.hp/Math.max(1,c.maxHp)) - (a.hp/Math.max(1,a.maxHp)))[0];
+    if(!relief) return false;
+    if(relief.hp / Math.max(1,relief.maxHp) < 0.5) return false;   // no point swapping in another cripple
+    unit.shiftedOnce = true;
+    relief.row = 'front';
+    unit.row = 'back';
+    sfx('shift');
+    logMsg(`🔀 ${unit.emoji} ${unit.name} falls back; ${relief.emoji} ${relief.name} steps up to hold the line.`);
+    return true;
+  }
+
+  unit.shiftedOnce = true;
+  unit.row = 'back';
+  sfx('shift');
+  logMsg(`🔀 ${unit.emoji} ${unit.name} pulls back behind the line.`);
+  return true;
+}
+
 function enemyAct(unit){
   if(unit.isBoss && unit.shielded){
     unit.repairCd--;
@@ -2932,12 +3312,21 @@ function enemyAct(unit){
       }
     }
   }
+  const tier = aiTier();
+  if(tier >= AI_COORDINATED && enemyTryShift(unit)){ render(); return; }
+
   if(unit.skillCd>0) unit.skillCd--;
   const targets = getValidTargets(unit);
   if(targets.length===0) return;
-  targets.sort((a,c)=>a.hp-c.hp);
-  const target = targets[0];
-  const useSkill = unit.skillCd<=0 && Math.random()<0.5;
+
+  let target = targets[0], best = -Infinity;
+  targets.forEach(t=>{
+    const sc = scoreTarget(unit, t, tier);
+    if(sc > best){ best = sc; target = t; }
+  });
+  if(tier >= AI_COORDINATED && state.battle) state.battle.focusId = target.id;
+
+  const useSkill = decideSkill(unit, target, tier);
   if(useSkill) unit.skillCd = unit.skillMaxCd;
   applyDamage(unit, target, useSkill);
 }
@@ -2970,8 +3359,10 @@ function doShift(unit, ally){
   const dest = shiftDestination(unit);
   if(ally) ally.row = unit.row;
   unit.row = dest;
+  sfx('shift');
   logMsg(`🔀 ${unit.emoji} ${unit.name} shifts to the ${dest.toUpperCase()} line${ally?`, trading places with ${ally.emoji} ${ally.name}`:''}.`);
   applySynergyRefresh();
+  tutorialSaw('shift');
   b.pendingAction = null;
   b.qIndex++;
   render();
@@ -2982,7 +3373,9 @@ function doShift(unit, ally){
 function useGaugeOverdrive(){
   const b = state.battle;
   b.awaitingInput = false;
+  tutorialSaw('gauge');
   spendGauge(GAUGE_COST.overdrive);
+  sfx('gauge'); shake(true);
   logMsg('⚡⚡ LEGION OVERDRIVE! The whole legion strikes as one!');
   b.playerUnits.filter(u=>!u.fainted).forEach(u=>{
     const targets = b.enemyUnits.filter(t=>!t.fainted);
@@ -2998,7 +3391,9 @@ function useGaugeOverdrive(){
 function useGaugeRally(){
   const b = state.battle;
   b.awaitingInput = false;
+  tutorialSaw('gauge');
   spendGauge(GAUGE_COST.rally);
+  sfx('shield');
   logMsg('🛡✨ RALLY! The legion braces as one — shields up, afflictions burned off.');
   b.playerUnits.filter(u=>!u.fainted).forEach(u=>{
     u.shield=true; u.status=null;
@@ -3020,6 +3415,7 @@ function playerTarget(targetId){
   if(b.pendingAction==='shift'){ doShift(unit, target); return; }
 
   if(b.pendingAction==='gauge_purge'){
+    tutorialSaw('gauge');
     spendGauge(GAUGE_COST.purge);
     const hadStatus = !!target.status;
     target.status = null;
@@ -3034,7 +3430,9 @@ function playerTarget(targetId){
   }
 
   if(b.pendingAction==='gauge_alpha'){
+    tutorialSaw('gauge');
     spendGauge(GAUGE_COST.alpha);
+    sfx('gauge'); shake(true);
     logMsg(`✨💥 ${unit.emoji} ${unit.name} unleashes an ALPHA STRIKE!`);
     const raw = Math.max(1, Math.round(unit.atk*2.5 - target.def*0.5));
     const am = multiplierVs(unit, target);
@@ -3055,6 +3453,7 @@ function playerTarget(targetId){
   if(isSkill) unit.skillCd = unit.skillMaxCd;
   else if(unit.skillCd>0) unit.skillCd--;
   applyDamage(unit, target, isSkill);
+  tutorialSaw(isSkill ? 'skill' : 'attack');
   b.pendingAction = null; b.qIndex++;
   render();
   if(checkBattleEnd()) return;
@@ -3103,6 +3502,16 @@ function battleStats(result){
 function endBattle(result){
   const b = state.battle;
   b.result = result;
+
+  if(state.tutorial){
+    state.lastResult = { win: result==='win', tutorial:true };
+    state.screen = 'result';
+    sfx(result==='win' ? 'victory' : 'defeat');
+    musicStop();
+    render();
+    return;
+  }
+
   const dailyDone = scoreDailies(battleStats(result));
 
   if(state.duel){
@@ -3142,6 +3551,7 @@ function endBattle(result){
     state.lastResult = { win:won, trial:true, drops, dailyDone,
       mods: state.trial.mods.slice(), stage: state.trial.stage };
     state.screen = 'result';
+    sfx(won ? 'victory' : 'defeat');
     autosave();
     render();
     return;
@@ -3213,6 +3623,9 @@ function endBattle(result){
   }
   autosave();
   state.screen = 'result';
+  sfx(result==='win' ? 'victory' : 'defeat');
+  if(result==='win' && state.lastResult && state.lastResult.levelled && state.lastResult.levelled.length) setTimeout(()=>sfx('levelup'), 700);
+  musicStop();
   render();
 }
 
@@ -3233,6 +3646,7 @@ function renderUnit(u, activeId, validTargetIds){
   const allyPick = selectable && u.side==='player';
   return `
   <div class="unit ${u.isBoss?'boss':''} ${u.isGenerator?'gen':''} ${u.fainted?'fainted':''} ${u.id===activeId?'active':''} ${selectable?(allyPick?'allytarget':'targetable'):''}"
+       data-unit="${u.id}"
        ${selectable?`onclick="playerTarget('${u.id}')"`:''}>
     ${u.shielded?`<div class="shield-tag" title="shielded while a pylon stands">🛡 SHIELDED</div>`:''}
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
@@ -3306,8 +3720,9 @@ function renderBattle(){
   }
 
   return `
+  ${tutorialPanelHtml()}
   <div class="panel">
-    <h2 class="section">${isDeep(state.stage)?`DEPTH ${deepDepth(state.stage)}`:`STAGE ${state.stage}`} — ${bossForStage(state.stage)?'<span style="color:var(--danger)">COMMANDER FIGHT</span>':'BATTLE'}${isEliteStage(state.stage)?' <span style="color:var(--danger)">☠ ELITE</span>':''}</h2>
+    <h2 class="section">${tutorialActive()?'TRAINING DEPLOYMENT':(isDeep(state.stage)?`DEPTH ${deepDepth(state.stage)}`:`STAGE ${state.stage}`)} — ${bossForStage(state.stage)&&!tutorialActive()?'<span style="color:var(--danger)">COMMANDER FIGHT</span>':'BATTLE'}${isEliteStage(state.stage)?' <span style="color:var(--danger)">☠ ELITE</span>':''}</h2>
     ${state.trial?`<div class="boss-banner">☠ TRIAL — ${state.trial.mods.map(id=>MODIFIERS[id].emoji+' '+MODIFIERS[id].name).join(' · ')}</div>`:''}
     <div class="terrain-banner">🗺 ${b.terrain.name}: ${b.terrain.desc}</div>
     <div class="gauge-wrap">
@@ -3333,6 +3748,21 @@ function renderBattle(){
 /* ============ RESULT ============ */
 function renderResult(){
   const r = state.lastResult;
+  if(r.tutorial){
+    return `
+    <div class="panel finale" style="text-align:center;">
+      <h1 class="title" style="font-size:20px;">TRAINING COMPLETE</h1>
+      <p class="dim">You have the four verbs the whole game runs on:</p>
+      <div class="storytext" style="text-align:left;">
+        <b>Attack and skills</b> — skills hit harder and carry elemental riders.<br>
+        <b>Shift</b> — rows are not fixed. Reshaping the line rebuilds synergies mid-fight.<br>
+        <b>The gauge</b> — spend small and often, or bank it for Overdrive.<br>
+        <b>Elements</b> — fire beats nature, nature beats water, water beats fire; earth, volt and wind form the other ring.
+      </div>
+      <p class="dim">Everything else — salvage, fusion, tribes, the Deep — is built on top of those. The campaign will introduce them one at a time.</p>
+      <button class="btn primary" style="margin-top:10px;" onclick="finishTutorial()">Begin the campaign →</button>
+    </div>`;
+  }
   if(r.duel){
     return `
     <div class="panel" style="text-align:center;">
@@ -3412,6 +3842,13 @@ function renderResult(){
     <button class="btn primary" style="margin-top:10px;" onclick="retryStage()">Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →</button>
   </div>`;
 }
+function finishTutorial(){
+  state.tutorial = null;
+  state.battle = null;
+  state.lastResult = null;
+  sfx('click');
+  goProfiles();
+}
 function advanceStage(){
   state.stage++;
   if(isDeep(state.stage)) state.bestDepth = Math.max(state.bestDepth||0, deepDepth(state.stage));
@@ -3422,6 +3859,13 @@ function advanceStage(){
 function retryStage(){ state.battle=null; state.screen='hub'; render(); }
 
 /* ============ INIT ============ */
+/* Browsers block audio until a gesture; the first click anywhere unlocks it. */
+if(typeof document !== 'undefined' && document.addEventListener){
+  document.addEventListener('click', function primeAudio(){
+    audioResume();
+    if(audio.music) musicStart();
+  }, { once:false, passive:true });
+}
 render();
 try{ cloudInit(); }catch(e){ cloud.status = cloudConfigured() ? 'error' : 'off'; }
 </script>

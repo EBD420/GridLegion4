@@ -47,6 +47,7 @@ run bosses-tribes   dom-storage-server.js "$H/assert.js" "$S/09-bosses-trials-tr
 run social          dom-storage-server.js "$H/assert.js" "$S/10-social.js"
 run setup-diagnosis dom-storage-server.js "$H/assert.js" "$S/11-setup-diagnosis.js"
 run guild-hall      dom-storage-server.js "$H/assert.js" "$S/12-guild-hall.js"
+run ai-audio-coach  dom-storage-server.js "$H/assert.js" "$S/13-ai-audio-tutorial.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"
