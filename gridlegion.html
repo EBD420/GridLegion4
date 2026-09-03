@@ -130,6 +130,9 @@
   .shield-tag{ position:absolute; top:-9px; left:50%; transform:translateX(-50%); font-size:10px; color:var(--water); background:var(--bg2); border:1px solid var(--water); padding:0 3px; white-space:nowrap; }
   .misscard{ background:var(--bg2); border:2px solid var(--border); padding:10px; width:280px; }
   .misscard.done{ border-color:var(--nature); }
+  .planbox{ background:#000; border:2px solid var(--border); padding:8px; margin-bottom:8px; font-size:17px; line-height:1.6; }
+  .planrow{ padding:2px 0; }
+  .planrow.sel{ background:#2a2c58; }
   .coach{
     background: #1b2440; border:3px solid var(--water); border-left-width:8px;
     padding:12px 14px; margin-bottom:14px; font-size:19px; line-height:1.45;
@@ -534,7 +537,13 @@ const TERRAINS = {
   flood:     { name:'Flooded Fields', desc:'Water +15% ATK. Volt skills may short-circuit onto an ally.', mods:{ buffElem:'water', buffStat:'atk', buffPct:0.15, backfireElem:'volt', backfireChance:0.3 } },
   ashen:     { name:'Ashen Wasteland', desc:'Fire is immune to Burn. Nature -15% DEF.', mods:{ immuneElem:'fire', immuneStatus:'burn', debuffElem:'nature', debuffStat:'def', debuffPct:0.15 } },
   ironbound: { name:'Ironbound Ridge', desc:'Earth +15% DEF. All skill cooldowns +1 turn.', mods:{ buffElem:'earth', buffStat:'def', buffPct:0.15, cdPenalty:1 } },
+  stormfront:{ name:'Stormfront', desc:'Volt +15% ATK. Wind units are grounded (-15% SPD).', mods:{ buffElem:'volt', buffStat:'atk', buffPct:0.15, debuffElem:'wind', debuffStat:'spd', debuffPct:0.15 } },
+  overgrowth:{ name:'Overgrowth', desc:'Nature +15% HP. Earth units are rooted (-15% SPD).', mods:{ buffElem:'nature', buffStat:'hp', buffPct:0.15, debuffElem:'earth', debuffStat:'spd', debuffPct:0.15 } },
 };
+/* Which way the battlefield tips when one element dominates the damage. */
+const ELEM_TERRAIN = { fire:'ashen', water:'flood', wind:'sandstorm', earth:'ironbound', volt:'stormfront', nature:'overgrowth' };
+const TERRAIN_SHIFT_AT = 140;    // damage of one element before the field turns
+const MAX_TERRAIN_SHIFTS = 2;
 function terrainForStage(stage){
   const cycle = ['clear','clear','sandstorm','flood','clear','ashen','ironbound','clear','sandstorm','flood'];
   return TERRAINS[cycle[(stage-1) % cycle.length]];
@@ -1025,6 +1034,8 @@ function serializeSave(){
     recruited: state.recruited,
     daily: state.daily,
     audio: { sfx: audio.sfx, music: audio.music },
+    codex: state.codex,
+    tactical: state.tactical,
   };
 }
 function validateSave(d){
@@ -1039,15 +1050,27 @@ function reviveMonster(m){
   if(!m || typeof m!=='object') return null;
   if(!SPECIES[m.speciesId] && !HYBRID_SPECIES[m.speciesId]) return null;
   const tier = (m.tier===2||m.tier===3) ? m.tier : 1;
+  const grafts = reviveGrafts(m.grafts);
+  const slotCap = (tier>=3?4:(tier>=2?3:2)) + ((grafts && grafts.slot) ? grafts.slot : 0);
   return {
     uid: typeof m.uid==='string' ? m.uid : uid(),
     speciesId: m.speciesId,
     level: (typeof m.level==='number' && m.level>=1) ? Math.floor(m.level) : 1,
     exp: (typeof m.exp==='number' && m.exp>=0) ? m.exp : 0,
     tier,
-    parts: Array.isArray(m.parts) ? m.parts.filter(k=>PARTS[k]).slice(0, tier>=3?4:(tier>=2?3:2)) : [],
+    parts: Array.isArray(m.parts) ? m.parts.filter(k=>PARTS[k]).slice(0, slotCap) : [],
     trait: (m.trait && TRAITS[m.trait.key]) ? m.trait : rollTrait(),
+    grafts,
   };
+}
+function reviveGrafts(g){
+  if(!g || typeof g!=='object') return null;
+  const out = {};
+  Object.keys(GRAFT_KINDS).forEach(k=>{
+    const v = g[k];
+    if(typeof v==='number' && v>0) out[k] = Math.min(k==='slot' ? 1 : 5, Math.floor(v));
+  });
+  return Object.keys(out).length ? out : null;
 }
 function applySave(d, slot){
   const roster = d.roster.map(reviveMonster).filter(Boolean);
@@ -1072,6 +1095,15 @@ function applySave(d, slot){
     Object.keys(d.cleared).forEach(k=>{ const n=Number(k); if(n>=1 && n<=9999) state.cleared[n]=true; });
   }
   state.trial = null;
+  state.codex = null;
+  if(d.codex && typeof d.codex==='object'){
+    const c = codex();
+    ['species','enemies','hybrids','bosses','terrains','parts','traits'].forEach(cat=>{
+      const src = d.codex[cat];
+      if(src && typeof src==='object') Object.keys(src).forEach(k=>{ if(src[k]) c[cat][k]=true; });
+    });
+  }
+  state.tactical = d.tactical === true;
   state.favor = {};
   if(d.favor && typeof d.favor==='object'){
     TRIBE_IDS.forEach(e=>{
@@ -1233,6 +1265,11 @@ let state = {
   lastFusion: null,
   confirmWipe: null,
   daily: null,
+  harvest: null,
+  transfer: null,
+  bayMsg: '',
+  codex: null,
+  tactical: false,
   tutorial: null,
   duel: null,
   raidRun: false,
@@ -1251,7 +1288,26 @@ let state = {
 };
 
 function newMonster(speciesId, level=1, tier=1, trait){
-  return { uid: uid(), speciesId, level, exp:0, tier, parts:[], trait: trait || rollTrait() };
+  return { uid: uid(), speciesId, level, exp:0, tier, parts:[], trait: trait || rollTrait(), grafts:null };
+}
+/* Grafts are permanent, harvested from a beast the rust already claimed. */
+const GRAFT_KINDS = {
+  slot: { name:'Bracing Frame', desc:'+1 part slot', emoji:'🔩' },
+  atk:  { name:'Killcore',      desc:'+10% ATK',    emoji:'⚔' },
+  def:  { name:'Hullplate',     desc:'+10% DEF',    emoji:'🛡' },
+  hp:   { name:'Reservoir',     desc:'+10% max HP', emoji:'❤' },
+  spd:  { name:'Servo Bundle',  desc:'+10% SPD',    emoji:'💨' },
+};
+const HARVEST_RUST = 50;                 // VOLATILE or worse
+function canHarvest(m){ return !!m && monsterCorruption(m) >= HARVEST_RUST; }
+function graftsOf(m){ return (m && m.grafts) ? m.grafts : null; }
+function graftCount(m, kind){ const g = graftsOf(m); return (g && g[kind]) ? g[kind] : 0; }
+function addGraft(m, kind){
+  if(!GRAFT_KINDS[kind]) return false;
+  m.grafts = m.grafts || {};
+  if(kind==='slot' && graftCount(m,'slot') >= 1) return false;   // one extra slot, ever
+  m.grafts[kind] = (m.grafts[kind]||0) + 1;
+  return true;
 }
 
 function initGame(){
@@ -1264,10 +1320,16 @@ function initGame(){
   state.selectedPart = null;
   state.discovered = {};
   state.cleared = {};
+  state.codex = null;
   state.favor = {};
   state.blessing = null;
   state.recruited = {};
+  state.codex = null;
+  state.tactical = false;
   state.daily = null;
+  state.harvest = null;
+  state.transfer = null;
+  state.bayMsg = '';
   state.tutorial = null;
   state.duel = null;
   state.raidRun = false;
@@ -1302,7 +1364,10 @@ function getSpeciesData(speciesId, tier){
   return base;
 }
 
-function partSlots(m){ return m.tier>=3 ? 4 : (m.tier>=2 ? 3 : 2); }
+function partSlots(m){
+  const base = m.tier>=3 ? 4 : (m.tier>=2 ? 3 : 2);
+  return base + graftCount(m,'slot');
+}
 function monsterCorruption(m){
   const ps = (m.parts||[]).map(k=>PARTS[k]).filter(Boolean);
   if(ps.length===0) return 0;
@@ -1326,6 +1391,13 @@ function computeStats(monster){
     if(p.stat==='spd') spd = Math.round(spd*(1+p.pct));
     if(!elements.includes(p.element)) elements.push(p.element);
   });
+  const g = graftsOf(monster);
+  if(g){
+    if(g.atk) atk = Math.round(atk * Math.pow(1.10, g.atk));
+    if(g.def) def = Math.round(def * Math.pow(1.10, g.def));
+    if(g.hp)  hp  = Math.round(hp  * Math.pow(1.10, g.hp));
+    if(g.spd) spd = Math.round(spd * Math.pow(1.10, g.spd));
+  }
   const tr = monster.trait;
   if(tr){
     if(tr.key==='savage')   atk = Math.round(atk*1.08);
@@ -1337,7 +1409,7 @@ function computeStats(monster){
   return {
     name: sd.name, emoji: sd.emoji + ((monster.parts||[]).length?'⚙':''),
     element: sd.element, elements, innate, hybrid: !!sd.hybrid, skill: sd.skill,
-    trait: tr || null, tier: monster.tier,
+    trait: tr || null, tier: monster.tier, grafts: g,
     hp, atk, def, spd, corruption,
   };
 }
@@ -1536,6 +1608,154 @@ function shake(strong){
   }catch(e){}
 }
 
+/* ================= BESTIARY =================
+   Fills in as you meet things. Doubles as the reference the game needs now that
+   it has this many systems.
+   ============================================ */
+function codex(){
+  state.codex = state.codex || { species:{}, enemies:{}, hybrids:{}, bosses:{}, terrains:{}, parts:{}, traits:{} };
+  return state.codex;
+}
+function codexSee(cat, key){
+  if(!key) return;
+  const c = codex();
+  if(!c[cat]) c[cat] = {};
+  if(!c[cat][key]){ c[cat][key] = true; return true; }
+  return false;
+}
+function codexCount(cat){ return Object.keys(codex()[cat]||{}).length; }
+function codexTotals(){
+  return {
+    species: Object.keys(SPECIES).length,
+    enemies: ENEMY_IDS.length,
+    hybrids: Object.keys(HYBRID_SPECIES).length,
+    bosses: Object.keys(BOSSES).length + 1,
+    terrains: Object.keys(TERRAINS).length,
+    parts: Object.keys(PARTS).length,
+    traits: TRAIT_IDS.length,
+  };
+}
+function codexProgress(){
+  const t = codexTotals();
+  let seen = 0, total = 0;
+  Object.keys(t).forEach(k=>{ seen += codexCount(k); total += t[k]; });
+  return { seen, total, pct: total ? Math.round((seen/total)*100) : 0 };
+}
+/* Record everything a battle puts in front of the player. */
+function codexRecordBattle(){
+  const b = state.battle; if(!b) return;
+  Object.keys(TERRAINS).forEach(k=>{ if(TERRAINS[k]===b.terrain) codexSee('terrains', k); });
+  b.enemyUnits.forEach(u=>{
+    if(u.speciesKey) codexSee('enemies', u.speciesKey);
+    if(u.isBoss) codexSee('bosses', u.name);
+  });
+  b.playerUnits.forEach(u=>codexRecordMonsterUnit(u));
+}
+function codexRecordMonsterUnit(u){
+  const m = findMonster(u.monsterUid);
+  if(m) codexRecordMonster(m);
+}
+function codexRecordMonster(m){
+  if(!m) return;
+  if(isHybridId(m.speciesId)) codexSee('hybrids', m.speciesId);
+  else codexSee('species', m.speciesId);
+  (m.parts||[]).forEach(k=>codexSee('parts', k));
+  if(m.trait) codexSee('traits', m.trait.key);
+}
+
+function renderCodex(){
+  const c = codex(), t = codexTotals(), p = codexProgress();
+  const box = (title, cat, entries) => `
+    <div class="panel">
+      <h2 class="section">${title} — ${codexCount(cat)}/${t[cat]}</h2>
+      <div class="row">${entries}</div>
+    </div>`;
+
+  const speciesCards = Object.keys(SPECIES).map(id=>{
+    const sd = SPECIES[id], known = c.species[id];
+    return `<div class="mcard" style="width:104px; cursor:default; ${known?'':'opacity:0.3'}">
+      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="name">${known?sd.name:'???'}</div>
+      ${known?`<span class="elem-tag elem-${sd.element}">${sd.element}</span>
+        <div class="dim" style="font-size:13px;">HP ${sd.base.hp} · ATK ${sd.base.atk}<br>DEF ${sd.base.def} · SPD ${sd.base.spd}</div>
+        <div style="font-size:13px; color:var(--wind)">${escapeHtml(sd.skill)}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const enemyCards = ENEMY_IDS.map(id=>{
+    const sd = ENEMY_SPECIES[id], known = c.enemies[id];
+    return `<div class="mcard" style="width:104px; cursor:default; ${known?'':'opacity:0.3'}">
+      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="name">${known?sd.name:'???'}</div>
+      ${known?`<span class="elem-tag elem-${sd.element}">${sd.element}</span>
+        <div class="dim" style="font-size:13px;">drops ${PARTS[id].emoji} ${escapeHtml(PARTS[id].name)}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const hybridCards = Object.keys(HYBRID_SPECIES).map(id=>{
+    const sd = HYBRID_SPECIES[id], known = c.hybrids[id];
+    return `<div class="mcard" style="width:104px; cursor:default; ${known?'':'opacity:0.3'}">
+      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="name">${known?sd.name:'???'}</div>
+      ${elemTags(sd.elements)}
+      ${known?`<div style="font-size:13px; color:var(--wind)">${escapeHtml(sd.skill)}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const bossNames = Object.keys(BOSSES).map(k=>BOSSES[k]).concat([DEEP_BOSS]);
+  const bossCards = bossNames.map(bd=>{
+    const known = c.bosses[bd.name];
+    return `<div class="mcard" style="width:130px; cursor:default; ${known?'':'opacity:0.3'}">
+      <div class="emoji">${known?bd.emoji:'❓'}</div>
+      <div class="name">${known?bd.name:'???'}</div>
+      ${known?`<span class="elem-tag elem-${bd.element}">${bd.element}</span>
+        <div class="dim" style="font-size:13px;">${bd.gens} × ${escapeHtml(bd.genName)}</div>`:''}
+    </div>`;
+  }).join('');
+
+  const terrainCards = Object.keys(TERRAINS).map(k=>{
+    const T = TERRAINS[k], known = c.terrains[k];
+    return `<div class="pcard" style="width:170px; cursor:default; border-color:var(--border); ${known?'':'opacity:0.3'}">
+      <div class="pname" style="color:var(--wind)">${known?escapeHtml(T.name):'???'}</div>
+      <div class="dim" style="font-size:14px;">${known?escapeHtml(T.desc):'Not yet fought on.'}</div>
+    </div>`;
+  }).join('');
+
+  const partCards = Object.keys(PARTS).map(k=>{
+    const P = PARTS[k], known = c.parts[k];
+    return `<div class="pcard" style="width:150px; cursor:default; ${known?'':'opacity:0.3'}">
+      <div class="pname">${known?P.emoji+' '+escapeHtml(P.name):'❓ ???'}</div>
+      ${known?`<div>+${Math.round(P.pct*100)}% ${STAT_LABEL[P.stat]}</div>
+        <span class="elem-tag elem-${P.element}">+${P.element}</span>
+        <div style="color:var(--rust); font-size:13px;">⚙ +${P.corruption} rust</div>`:''}
+    </div>`;
+  }).join('');
+
+  const traitCards = TRAIT_IDS.map(k=>{
+    const T = TRAITS[k], known = c.traits[k];
+    return `<div class="pcard" style="width:150px; cursor:default; border-color:var(--volt); ${known?'':'opacity:0.3'}">
+      <div class="pname" style="color:var(--volt)">${known?T.emoji+' '+escapeHtml(T.name):'❓ ???'}</div>
+      <div class="dim" style="font-size:14px;">${known?escapeHtml(T.desc):'Not yet rolled.'}</div>
+    </div>`;
+  }).join('');
+
+  return `
+  <div class="panel">
+    <h2 class="section">BESTIARY — ${p.seen}/${p.total} recorded (${p.pct}%)</h2>
+    <div class="gauge-bg"><div class="gauge-fill" style="width:${p.pct}%"></div></div>
+    <p class="dim" style="margin-top:8px;">Everything here is filled in by meeting it: fielding a beast, fighting a chassis, standing on a battlefield, rolling a trait.</p>
+  </div>
+  ${box('TRIBES OF TEXEL','species',speciesCards)}
+  ${box('RUSTBOUND CHASSIS','enemies',enemyCards)}
+  ${box('SPLICED HYBRIDS','hybrids',hybridCards)}
+  ${box('COMMANDERS','bosses',bossCards)}
+  ${box('BATTLEFIELDS','terrains',terrainCards)}
+  ${box('SALVAGE','parts',partCards)}
+  ${box('TRAITS','traits',traitCards)}
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+function goCodex(){ state.screen='codex'; sfx('click'); render(); }
+
 /* ============ RENDER ROOT ============ */
 function render(){
   const app = document.getElementById('app');
@@ -1547,6 +1767,7 @@ function render(){
   else if(state.screen==='trials') app.innerHTML = renderTrials();
   else if(state.screen==='tribes') app.innerHTML = renderTribes();
   else if(state.screen==='missions') app.innerHTML = renderMissions();
+  else if(state.screen==='codex') app.innerHTML = renderCodex();
   else if(state.screen==='guild') app.innerHTML = renderGuild();
   else if(state.screen==='ladder') app.innerHTML = renderLadder();
   else if(state.screen==='roster') app.innerHTML = renderRoster();
@@ -1830,12 +2051,14 @@ function renderHub(){
       <button class="btn" onclick="goFormation()">⚔ Formation (${filled}/6)</button>
       <button class="btn rust" onclick="goSalvage()">⚙ Salvage Bay (${state.parts.length})</button>
       <button class="btn" onclick="goTribes()">🏕 Tribes${activeBlessing()?' ★':''}</button>
+      <button class="btn" onclick="goCodex()">📖 Bestiary (${codexProgress().pct}%)</button>
       <button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>
       ${clearedStages().length?`<button class="btn" onclick="goTrials()">☠ Trials (${clearedStages().length})</button>`:''}
     </div>
     <div class="row" style="margin-top:10px; align-items:center;">
       <button class="btn small" onclick="goGuild()">🛡 Guild</button>
       <button class="btn small" onclick="goLadder()">🏆 Ladder</button>
+      <button class="btn small audio-btn" onclick="toggleTactical()">${state.tactical?'🧠 Tactical':'⚡ Live'}</button>
       <button class="btn small audio-btn" onclick="toggleSfx()">${audio.sfx?'🔊':'🔇'} SFX</button>
       <button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>
       <button class="btn small" onclick="manualSave()">💾 Save</button>
@@ -2359,7 +2582,7 @@ function endTrial(){
 }
 function goRoster(){ state.screen='roster'; render(); }
 function goFormation(){ state.screen='formation'; state.formSelected=null; render(); }
-function goSalvage(){ state.screen='salvage'; state.selectedPart=null; render(); }
+function goSalvage(){ state.screen='salvage'; state.selectedPart=null; state.harvest=null; state.transfer=null; state.bayMsg=''; render(); }
 
 /* ============ SHARED BITS ============ */
 function corruptionBar(c){
@@ -2540,6 +2763,9 @@ function renderSalvage(){
     </div>`;
   }).join('');
 
+  const mode = state.harvest ? 'harvest' : (state.transfer ? 'transfer' : null);
+  const busyDonor = state.harvest ? state.harvest.donor : (state.transfer ? state.transfer.donor : null);
+
   const monCards = state.roster.map(m=>{
     const st = computeStats(m);
     const slots = partSlots(m);
@@ -2550,16 +2776,58 @@ function renderSalvage(){
         ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${PARTS[k].emoji} ✖</span>`
         : `<span class="slotchip" onclick="installPart('${m.uid}')">+ empty</span>`;
     }
-    return `<div class="mcard" style="width:120px; cursor:default;">
+    const g = st.grafts;
+    const graftLine = g ? `<div style="font-size:12px; color:var(--rust); margin-top:2px;">${
+      Object.keys(g).map(k=>`${GRAFT_KINDS[k].emoji}${g[k]>1?('×'+g[k]):''}`).join(' ')}</div>` : '';
+
+    const isDonor = busyDonor===m.uid;
+    let action = '';
+    if(mode==='harvest' && state.harvest.kind && !isDonor){
+      action = `<button class="btn small primary" style="margin-top:4px;" onclick="doHarvest('${m.uid}')">Graft here</button>`;
+    } else if(mode==='transfer' && !isDonor){
+      action = `<button class="btn small primary" style="margin-top:4px;" onclick="doTransfer('${m.uid}')">Carry over</button>`;
+    } else if(!mode){
+      const bits = [];
+      if(canHarvest(m)) bits.push(`<button class="btn small danger" onclick="beginHarvest('${m.uid}')">☢ Harvest</button>`);
+      if(m.trait && m.level>=3) bits.push(`<button class="btn small" onclick="beginTransfer('${m.uid}')">↪ Trait</button>`);
+      if(bits.length) action = `<div style="margin-top:4px;">${bits.join(' ')}</div>`;
+    }
+    return `<div class="mcard ${isDonor?'selected':''}" style="width:130px; cursor:default;">
       <div class="emoji">${st.emoji}</div>
       <div class="name">${st.name}</div>
       <div class="lvl">Lv.${m.level}</div>
       ${elemTags(st.elements)}
       ${traitTag(st.trait)}
+      ${graftLine}
       <div style="margin-top:4px;">${chips}</div>
       ${corruptionBar(st.corruption)}
+      ${action}
     </div>`;
   }).join('');
+
+  let opPanel = '';
+  if(mode==='harvest'){
+    const d = findMonster(state.harvest.donor);
+    const kinds = Object.keys(GRAFT_KINDS).map(k=>{
+      const K = GRAFT_KINDS[k], on = state.harvest.kind===k;
+      return `<div class="pcard ${on?'selected':''}" style="width:150px;" onclick="pickGraft('${k}')">
+        <div class="pname">${K.emoji} ${K.name}</div><div class="dim" style="font-size:14px;">${K.desc}</div></div>`;
+    }).join('');
+    opPanel = `<div class="panel">
+      <h2 class="section">HARVEST — ${escapeHtml(d?computeStats(d).name:'?')}</h2>
+      <p class="dim">The rust has this one. Strip it for parts that outlive it: pick a graft, then choose which beast receives it. <b>${escapeHtml(d?computeStats(d).name:'')} will be destroyed</b>, along with anything installed on it.</p>
+      <div class="row">${kinds}</div>
+      <p class="dim" style="margin-top:8px;">${state.harvest.kind?'Now choose a recipient below.':'Choose a graft.'}
+        <span style="cursor:pointer; color:var(--danger);" onclick="cancelBayAction()">[cancel]</span></p>
+    </div>`;
+  } else if(mode==='transfer'){
+    const d = findMonster(state.transfer.donor);
+    opPanel = `<div class="panel">
+      <h2 class="section">TRAIT TRANSFER — ${escapeHtml(d?computeStats(d).name:'?')}</h2>
+      <p class="dim">Carry <b>${d&&d.trait?escapeHtml(traitName(d.trait)):'—'}</b> onto another beast. The donor is consumed and the recipient's own trait is overwritten.</p>
+      <p class="dim">Choose a recipient below. <span style="cursor:pointer; color:var(--danger);" onclick="cancelBayAction()">[cancel]</span></p>
+    </div>`;
+  }
 
   return `
   <div class="panel">
@@ -2567,16 +2835,74 @@ function renderSalvage(){
     <p class="dim">Bolt Rustbound parts onto your beasts. A part grants stats <b>and a second element</b> — which counts toward row synergy, and shields the unit with the most favourable elemental matchup. It also loads the beast with <b>rust</b>. Rusted units seize up mid-battle, and badly rusted ones turn on their own line.</p>
     <div class="row">${partCards || '<p class="dim">No salvage in storage. Win battles to strip parts from the wreckage.</p>'}</div>
     <p class="dim" style="margin-top:8px;">${state.selectedPart?'Now tap an <b>empty</b> slot on a beast below to install it.':'Tap a part to select it. Tap an installed part to purge it (the part is destroyed).'}</p>
+    ${state.bayMsg?`<p style="color:var(--gold)">${escapeHtml(state.bayMsg)}</p>`:''}
   </div>
+  ${opPanel}
   <div class="panel">
     <h2 class="section">LEGION</h2>
+    <p class="dim" style="font-size:15px;">A beast at <b>${HARVEST_RUST}+ rust</b> can be <b>☢ Harvested</b> — destroyed for a permanent graft on another. Any Lv.3+ beast can have its <b>↪ Trait</b> carried over to another, at the same cost.</p>
     <div class="row">${monCards}</div>
   </div>
   <div class="panel footer-nav">
-    <button class="btn" onclick="state.selectedPart=null; state.screen='hub'; render();">← Back to Hub</button>
+    <button class="btn" onclick="cancelBayAction(); state.selectedPart=null; state.screen='hub'; render();">← Back to Hub</button>
   </div>`;
 }
 function selectPart(u){ state.selectedPart = (state.selectedPart===u) ? null : u; render(); }
+
+/* --- harvest: the rust already took this one; take something back --- */
+function beginHarvest(uidStr){
+  const m = findMonster(uidStr);
+  if(!canHarvest(m)) return;
+  state.harvest = { donor: uidStr, kind: null };
+  state.transfer = null;
+  sfx('click'); render();
+}
+function pickGraft(kind){
+  if(!state.harvest || !GRAFT_KINDS[kind]) return;
+  state.harvest.kind = kind; sfx('click'); render();
+}
+function doHarvest(targetUid){
+  const h = state.harvest;
+  if(!h || !h.kind) return;
+  const donor = findMonster(h.donor), target = findMonster(targetUid);
+  if(!donor || !target || donor.uid===target.uid) return;
+  if(!canHarvest(donor)) return;
+  if(h.kind==='slot' && graftCount(target,'slot') >= 1){
+    state.bayMsg = 'That beast already carries a Bracing Frame.'; render(); return;
+  }
+  if(!addGraft(target, h.kind)){ state.bayMsg = 'That graft will not take.'; render(); return; }
+  // the donor is consumed, parts and all
+  state.roster = state.roster.filter(x=>x.uid!==donor.uid);
+  ['front','back'].forEach(r=>{ state.formation[r] = state.formation[r].map(u=> u===donor.uid ? null : u); });
+  const st = computeStats(target);
+  state.bayMsg = `${GRAFT_KINDS[h.kind].emoji} ${GRAFT_KINDS[h.kind].name} grafted onto ${st.name}. ${computeStats(donor).name} is gone.`;
+  state.harvest = null;
+  sfx('levelup'); autosave(); render();
+}
+
+/* --- trait transfer: move a good roll off a body you don't want --- */
+function beginTransfer(uidStr){
+  const m = findMonster(uidStr);
+  if(!m || !m.trait || m.level < 3) return;
+  state.transfer = { donor: uidStr };
+  state.harvest = null;
+  sfx('click'); render();
+}
+function doTransfer(targetUid){
+  const t = state.transfer;
+  if(!t) return;
+  const donor = findMonster(t.donor), target = findMonster(targetUid);
+  if(!donor || !target || donor.uid===target.uid) return;
+  if(donor.level < 3){ state.bayMsg = 'The donor must be Lv.3 or higher.'; render(); return; }
+  const moved = donor.trait;
+  target.trait = moved;
+  state.roster = state.roster.filter(x=>x.uid!==donor.uid);
+  ['front','back'].forEach(r=>{ state.formation[r] = state.formation[r].map(u=> u===donor.uid ? null : u); });
+  state.bayMsg = `${traitName(moved)} carried over to ${computeStats(target).name}. ${computeStats(donor).name} is gone.`;
+  state.transfer = null;
+  sfx('levelup'); autosave(); render();
+}
+function cancelBayAction(){ state.harvest=null; state.transfer=null; state.bayMsg=''; sfx('click'); render(); }
 function installPart(monsterUid){
   if(!state.selectedPart) return;
   const m = findMonster(monsterUid); if(!m) return;
@@ -2669,7 +2995,22 @@ function baseUnitDefaults(){
 }
 const STAT_BASE_KEY = { atk:'bAtk', def:'bDef', hp:'bHp', spd:'bSpd' };
 
+/* Snapshot the pre-terrain stats so the layer can be recomputed when the field turns. */
+function captureRaw(unit){
+  unit.rHp = unit.bHp; unit.rAtk = unit.bAtk; unit.rDef = unit.bDef; unit.rSpd = unit.bSpd;
+  unit.rSkillMaxCd = unit.skillMaxCd;
+}
+/* Wipe the old terrain's effects and lay the new one on top of the raw stats. */
+function reapplyTerrain(unit, terrain){
+  if(unit.rHp === undefined) captureRaw(unit);
+  unit.bHp = unit.rHp; unit.bAtk = unit.rAtk; unit.bDef = unit.rDef; unit.bSpd = unit.rSpd;
+  unit.skillMaxCd = unit.rSkillMaxCd;
+  unit.missChance = 0; unit.backfireChance = 0;
+  if(!(unit.hybrid && unit.attackElements && unit.attackElements.indexOf('fire')>=0)) unit.burnImmune = false;
+  applyTerrainToUnit(unit, terrain);
+}
 function applyTerrainToUnit(unit, terrain){
+  if(unit.rHp === undefined) captureRaw(unit);
   const m = terrain.mods;
   if(m.buffElem && unit.elements.includes(m.buffElem)){
     const k = STAT_BASE_KEY[m.buffStat]; unit[k] = Math.round(unit[k]*(1+m.buffPct));
@@ -2962,6 +3303,7 @@ function beginBattle(){
     log: [], pendingAction: null, result: null,
     elemDamage: {},
     totalDamage: 0,
+    terrainShifts: 0,
     awaitingInput: false,
     synLabels: { front:null, back:null },
   };
@@ -2987,6 +3329,7 @@ function beginBattle(){
       logMsg(`📡 The Rustbound anticipated your ${adapted} legion.`);
     }
   }
+  codexRecordBattle();
   state.screen = 'battle';
   audioResume();
   if(audio.music) musicStart();
@@ -3005,8 +3348,10 @@ function startRound(){
   if(!b || b.result) return;
   b.rounds = (b.rounds||0) + 1;
   b.focusId = null;
+  if(tacticalOn()){ beginPlanning(); }
   b.queue = aliveUnits().sort((a,c)=> effectiveSpd(c) - effectiveSpd(a) + (Math.random()-0.5));
   b.qIndex = 0;
+  if(b.planning){ render(); return; }   // wait for the player to write orders
   nextTurn();
 }
 function battleActive(b){ return state.battle && state.battle===b && !b.result; }
@@ -3088,7 +3433,17 @@ function nextTurn(){
     }, 500);
     return;
   }
-  // player's turn — only now do we accept input
+  // player's turn
+  if(tacticalOn() && b.orders && b.orders[unit.id]){
+    setTimeout(()=>{
+      if(!battleActive(b)) return;
+      runOrder(unit);
+      b.qIndex++;
+      render();
+      if(!checkBattleEnd()) setTimeout(nextTurn, 420);
+    }, 380);
+    return;
+  }
   b.awaitingInput = true;
   render();
 }
@@ -3139,6 +3494,28 @@ function applyRust(unit, delta){
   unit.defectChance = t.defect;
 }
 
+/* Reactive terrain: enough of one element and the battlefield takes on its character. */
+function checkTerrainShift(){
+  const b = state.battle;
+  if(!b || b.result) return;
+  b.terrainShifts = b.terrainShifts || 0;
+  if(b.terrainShifts >= MAX_TERRAIN_SHIFTS) return;
+  let best = null, bestDmg = 0;
+  Object.keys(b.elemDamage).forEach(e=>{
+    if(b.elemDamage[e] > bestDmg){ bestDmg = b.elemDamage[e]; best = e; }
+  });
+  if(!best || bestDmg < TERRAIN_SHIFT_AT * (b.terrainShifts + 1)) return;
+  const key = ELEM_TERRAIN[best];
+  if(!key || !TERRAINS[key] || b.terrain === TERRAINS[key]) return;
+  b.terrain = TERRAINS[key];
+  b.terrainShifts++;
+  b.playerUnits.concat(b.enemyUnits).forEach(u=>reapplyTerrain(u, b.terrain));
+  refreshSynergies(b.playerUnits, false);
+  b.enemyUnits.forEach(u=>{ u.atk=u.bAtk; u.def=u.bDef; u.spd=u.bSpd; u.maxHp=u.bHp; u.hp=Math.min(u.hp,u.maxHp); });
+  sfx('gauge'); shake(false);
+  logMsg(`🌎 The field turns — sustained ${best.toUpperCase()} has made this ${b.terrain.name}. ${b.terrain.desc}`);
+}
+
 function chargeGauge(amount){
   const b = state.battle;
   if(activeBlessing()==='volt') amount *= 1.25;
@@ -3183,6 +3560,7 @@ function applyDamage(attacker, defender, isSkill){
     const b = state.battle;
     b.elemDamage[strikeElem] = (b.elemDamage[strikeElem]||0) + finalDmg;
     b.totalDamage = (b.totalDamage||0) + finalDmg;
+    checkTerrainShift();
   }
   if(attacker.side==='player' && finalDmg>0) chargeGauge(finalDmg/3);
   if(defender.side==='player' && finalDmg>0) chargeGauge(finalDmg/5);
@@ -3329,6 +3707,111 @@ function enemyAct(unit){
   const useSkill = decideSkill(unit, target, tier);
   if(useSkill) unit.skillCd = unit.skillMaxCd;
   applyDamage(unit, target, useSkill);
+}
+
+/* ================= TACTICAL MODE =================
+   Optional. Instead of acting when each unit's turn arrives, you write orders for
+   the whole legion at the start of the round and watch it play out. Orders survive
+   their target dying — the unit retargets rather than wasting its turn.
+   ================================================= */
+function tacticalOn(){ return state.tactical === true && !tutorialActive(); }
+function toggleTactical(){
+  state.tactical = !state.tactical;
+  sfx('click'); autosave(); render();
+}
+function planningOpen(){
+  const b = state.battle;
+  return !!(b && !b.result && tacticalOn() && b.planning);
+}
+function livingPlayerUnits(){
+  const b = state.battle;
+  return b ? b.playerUnits.filter(u=>!u.fainted) : [];
+}
+function beginPlanning(){
+  const b = state.battle;
+  if(!b || b.result || !tacticalOn()) return;
+  b.planning = true;
+  b.orders = {};
+  b.planUnit = null;
+  b.awaitingInput = false;
+}
+function planSelectUnit(id){
+  const b = state.battle; if(!b || !b.planning) return;
+  b.planUnit = (b.planUnit===id) ? null : id;
+  b.planAction = null;
+  sfx('click'); render();
+}
+function planChooseAction(kind){
+  const b = state.battle; if(!b || !b.planning || !b.planUnit) return;
+  const unit = b.playerUnits.find(u=>u.id===b.planUnit);
+  if(!unit) return;
+  if(kind==='shift'){
+    b.orders[b.planUnit] = { kind:'shift' };
+    b.planUnit = null; b.planAction = null;
+    sfx('click'); render(); return;
+  }
+  b.planAction = kind;
+  sfx('click'); render();
+}
+function planChooseTarget(targetId){
+  const b = state.battle; if(!b || !b.planning || !b.planUnit || !b.planAction) return;
+  b.orders[b.planUnit] = { kind:b.planAction, targetId };
+  b.planUnit = null; b.planAction = null;
+  sfx('click'); render();
+}
+function planClear(id){
+  const b = state.battle; if(!b || !b.planning) return;
+  delete b.orders[id];
+  sfx('click'); render();
+}
+function planReady(){
+  const b = state.battle; if(!b) return false;
+  return livingPlayerUnits().every(u=>!!b.orders[u.id]);
+}
+function executePlan(){
+  const b = state.battle;
+  if(!b || !b.planning || !planReady()) return;
+  b.planning = false;
+  b.planUnit = null; b.planAction = null;
+  sfx('gauge');
+  render();
+  nextTurn();
+}
+/* Carry out a standing order when the unit's turn comes round. */
+function runOrder(unit){
+  const b = state.battle;
+  const order = b.orders ? b.orders[unit.id] : null;
+  if(!order) return false;
+  delete b.orders[unit.id];
+
+  if(order.kind==='shift'){ doShiftAuto(unit); return true; }
+
+  let target = b.enemyUnits.concat(b.playerUnits).find(u=>u.id===order.targetId);
+  if(!target || target.fainted || target.shielded){
+    const fallback = getValidTargets(unit);
+    if(!fallback.length) return false;
+    target = fallback.sort((a,c)=>a.hp-c.hp)[0];
+    logMsg(`↷ ${unit.emoji} ${unit.name}'s mark is gone — it switches to ${target.emoji} ${target.name}.`);
+  }
+  const isSkill = order.kind==='skill' && unit.skillCd<=0;
+  if(isSkill) unit.skillCd = unit.skillMaxCd;
+  else if(unit.skillCd>0) unit.skillCd--;
+  applyDamage(unit, target, isSkill);
+  return true;
+}
+function doShiftAuto(unit){
+  const b = state.battle;
+  const dest = shiftDestination(unit);
+  const occupants = b.playerUnits.filter(u=>u.row===dest && !u.fainted);
+  let ally = null;
+  if(occupants.length >= 3){
+    ally = occupants.slice().sort((a,c)=>(c.hp/Math.max(1,c.maxHp))-(a.hp/Math.max(1,a.maxHp)))[0];
+  }
+  if(ally) ally.row = unit.row;
+  unit.row = dest;
+  sfx('shift');
+  logMsg(`🔀 ${unit.emoji} ${unit.name} shifts to the ${dest.toUpperCase()} line${ally?`, trading with ${ally.emoji} ${ally.name}`:''}.`);
+  applySynergyRefresh();
 }
 
 /* ============ PLAYER ACTIONS ============ */
@@ -3647,7 +4130,7 @@ function renderUnit(u, activeId, validTargetIds){
   return `
   <div class="unit ${u.isBoss?'boss':''} ${u.isGenerator?'gen':''} ${u.fainted?'fainted':''} ${u.id===activeId?'active':''} ${selectable?(allyPick?'allytarget':'targetable'):''}"
        data-unit="${u.id}"
-       ${selectable?`onclick="playerTarget('${u.id}')"`:''}>
+       ${selectable?`onclick="${planningOpen()?'planChooseTarget':'playerTarget'}('${u.id}')"`:''}>
     ${u.shielded?`<div class="shield-tag" title="shielded while a pylon stands">🛡 SHIELDED</div>`:''}
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
@@ -3665,7 +4148,10 @@ function renderBattle(){
   const activeUnit = b.qIndex<b.queue.length ? b.queue[b.qIndex] : null;
   const isPlayerTurn = activeUnit && activeUnit.side==='player' && !activeUnit.fainted && b.awaitingInput;
   let validTargetIds = [];
-  if(isPlayerTurn && b.pendingAction==='shift'){
+  if(planningOpen() && b.planUnit && b.planAction){
+    const pu = b.playerUnits.find(u=>u.id===b.planUnit);
+    if(pu) validTargetIds = getValidTargets(pu).map(u=>u.id);
+  } else if(isPlayerTurn && b.pendingAction==='shift'){
     const dest = shiftDestination(activeUnit);
     validTargetIds = b.playerUnits.filter(u=>u.row===dest && !u.fainted).map(u=>u.id);
   } else if(isPlayerTurn && b.pendingAction==='gauge_purge'){
@@ -3717,6 +4203,51 @@ function renderBattle(){
     }
   } else if(activeUnit){
     actionHtml = `<p class="dim">${activeUnit.side==='enemy' ? 'Enemy is acting...' : 'Resolving...'}</p>`;
+  }
+
+  if(planningOpen()){
+    const rows = livingPlayerUnits().map(u=>{
+      const o = b.orders[u.id];
+      const sel = b.planUnit===u.id;
+      let desc = '<span class="dim">no order</span>';
+      if(o){
+        if(o.kind==='shift') desc = `🔀 shift to ${shiftDestination(u).toUpperCase()}`;
+        else {
+          const t = b.enemyUnits.concat(b.playerUnits).find(x=>x.id===o.targetId);
+          desc = `${o.kind==='skill'?'✨ '+escapeHtml(u.skillName):'⚔ attack'} → ${t?escapeHtml(t.name):'?'}`;
+        }
+      }
+      return `<div class="planrow ${sel?'sel':''}">
+        <span style="cursor:pointer;" onclick="planSelectUnit('${u.id}')">${u.emoji} <b>${escapeHtml(u.name)}</b> <span class="dim">(${u.row})</span></span>
+        <span> — ${desc}</span>
+        ${o?`<span style="cursor:pointer; color:var(--danger);" onclick="planClear('${u.id}')"> [clear]</span>`:''}
+      </div>`;
+    }).join('');
+
+    let picker = '<p class="dim">Tap a unit above to give it an order.</p>';
+    if(b.planUnit){
+      const pu = b.playerUnits.find(u=>u.id===b.planUnit);
+      if(pu){
+        picker = b.planAction
+          ? `<p class="dim">Now tap a target for ${escapeHtml(pu.name)}'s ${b.planAction==='skill'?escapeHtml(pu.skillName):'attack'}.</p>`
+          : `<div class="actionbar">
+               <button class="btn primary" onclick="planChooseAction('attack')">⚔ Attack</button>
+               <button class="btn" ${pu.skillCd>0?'disabled':''} onclick="planChooseAction('skill')">✨ ${escapeHtml(pu.skillName)}${pu.skillCd>0?' ('+pu.skillCd+')':''}</button>
+               <button class="btn" onclick="planChooseAction('shift')">🔀 Shift to ${shiftDestination(pu).toUpperCase()}</button>
+             </div>`;
+      }
+    }
+    actionHtml = `
+      <div class="coach">
+        <div class="coach-title">TACTICAL ORDERS — ROUND ${b.rounds}</div>
+        <div>Write an order for every unit, then execute the round at once. If a mark falls before its turn, that unit retargets rather than wasting the turn.</div>
+      </div>
+      <div class="planbox">${rows}</div>
+      ${picker}
+      <div class="row" style="margin-top:8px;">
+        <button class="btn primary" ${planReady()?'':'disabled'} onclick="executePlan()">▶ EXECUTE ROUND${planReady()?'':' (orders missing)'}</button>
+        <button class="btn small" onclick="toggleTactical(); state.battle.planning=false; state.battle.orders={}; nextTurn();">Switch to live turns</button>
+      </div>`;
   }
 
   return `
