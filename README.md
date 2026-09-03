@@ -32,7 +32,10 @@ runs endlessly with elite waves every fifth depth.
 cleared stages under stackable handicaps; daily scavenger orders drawn from a date seed.
 A **Legion Identity** screen lets you rename your legion and assemble a banner from
 salvage parts you've actually fielded — it's what shows up for you in the guild roster,
-the raid board and the ladder.
+the raid board and the ladder. A **War Journal** writes a short recap after every stage
+and boss fight — built from what actually happened in it (who carried the fight, who
+landed the finishing blow, the closest call) rather than a fixed template — so your
+save file doubles as a readable story of the run so far.
 
 **Optional online.** Accounts and cloud saves, guilds with levels and perks, a shared
 raid boss, and an asynchronous PvP ladder. All of it is off until configured, and the
@@ -57,7 +60,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-652 assertions, no dependencies beyond `node`. The suites extract the script out of
+679 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

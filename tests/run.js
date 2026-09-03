@@ -49,6 +49,7 @@ const SUITES = [
   { label:'ai-audio-coach',  harness:'dom-storage-server.js', assert:true, files:['13-ai-audio-tutorial.js'] },
   { label:'harvest-codex',   harness:'dom-storage-server.js', assert:true, files:['14-harvest-codex-tactical.js'] },
   { label:'legion-identity', harness:'dom-storage-server.js', assert:true, files:['15-legion-identity.js'] },
+  { label:'war-journal',     harness:'dom-storage-server.js', assert:true, files:['16-war-journal.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

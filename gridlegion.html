@@ -1021,6 +1021,7 @@ function serializeSave(){
     v: SAVE_VERSION,
     name: state.profileName || 'Legion',
     emblem: Array.isArray(state.emblem) ? state.emblem.slice(0,3) : [],
+    journal: Array.isArray(state.journal) ? state.journal.slice(0, JOURNAL_CAP) : [],
     savedAt: Date.now(),
     stage: state.stage,
     bestDepth: state.bestDepth || 0,
@@ -1064,6 +1065,25 @@ function reviveMonster(m){
     grafts,
   };
 }
+/* Keeps the War Journal readable across app updates: an entry from a build
+   that no longer exists still has a stage number and prose, so it's kept
+   as-is rather than dropped — only malformed entries are discarded. */
+function reviveJournal(list){
+  if(!Array.isArray(list)) return [];
+  return list.filter(e => e && typeof e==='object'
+      && typeof e.text==='string' && e.text
+      && typeof e.stage==='number' && isFinite(e.stage) && e.stage>=1)
+    .map(e => ({
+      id: typeof e.id==='string' ? e.id : uid(),
+      stage: Math.max(1, Math.floor(e.stage)),
+      deep: e.deep === true,
+      win: e.win === true,
+      boss: typeof e.boss==='string' ? e.boss : null,
+      text: e.text.slice(0, 600),
+      at: (typeof e.at==='number' && isFinite(e.at)) ? e.at : Date.now(),
+    }))
+    .slice(0, JOURNAL_CAP);
+}
 function reviveGrafts(g){
   if(!g || typeof g!=='object') return null;
   const out = {};
@@ -1080,6 +1100,7 @@ function applySave(d, slot){
   state.slot = (typeof slot==='number') ? slot : null;
   state.profileName = (typeof d.name==='string' && d.name.trim()) ? d.name.trim().slice(0,18) : 'Legion';
   state.emblem = Array.isArray(d.emblem) ? d.emblem.filter(k=>PARTS[k]).slice(0,3) : [];
+  state.journal = reviveJournal(d.journal);
   state.stage = Math.max(1, Math.floor(d.stage));
   state.bestDepth = (typeof d.bestDepth==='number' && d.bestDepth>=0) ? Math.floor(d.bestDepth) : 0;
   state.roster = roster;
@@ -1283,6 +1304,7 @@ let state = {
   slot: null,
   profileName: 'Legion',
   emblem: [],
+  journal: [],
   bestDepth: 0,
   saveState: 'none',
   transfer: null,
@@ -1318,6 +1340,7 @@ function initGame(){
   state.roster = starters;
   state.parts = [];
   state.emblem = [];
+  state.journal = [];
   state.intel = { history: [], wins: 0 };
   state.formation.front = starters.map(m=>m.uid);
   state.formation.back = [null,null,null];
@@ -1803,6 +1826,31 @@ function renderCodex(){
 }
 function goCodex(){ state.screen='codex'; sfx('click'); render(); }
 
+/* ============ WAR JOURNAL ============ */
+function goJournal(){ state.screen='journal'; sfx('click'); render(); }
+function renderJournal(){
+  const entries = Array.isArray(state.journal) ? state.journal : [];
+  const cards = entries.map(e=>{
+    const label = e.deep ? `Depth ${deepDepth(e.stage)}` : `Stage ${e.stage}`;
+    const when = new Date(e.at||Date.now());
+    return `
+    <div style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px dashed var(--border);">
+      <div class="row" style="justify-content:space-between; align-items:baseline;">
+        <div style="font-size:19px; color:${e.win?'var(--gold)':'var(--danger)'};">${e.boss?'☠ ':''}${escapeHtml(label)}${e.boss?' — '+escapeHtml(e.boss):(e.win?' — victory':' — defeat')}</div>
+        <div class="dim" style="font-size:13px;">${when.toLocaleDateString()}</div>
+      </div>
+      <div class="storytext">${escapeHtml(e.text)}</div>
+    </div>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">WAR JOURNAL</h2>
+    <p class="dim">Written after every stage, from what actually happened in it — not the numbers, the story.</p>
+    ${cards || '<p class="dim" style="margin-top:8px;">Nothing recorded yet. Fight a stage and the first entry writes itself.</p>'}
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
 /* ============ RENDER ROOT ============ */
 function render(){
   const app = document.getElementById('app');
@@ -1818,6 +1866,7 @@ function render(){
   else if(state.screen==='guild') app.innerHTML = renderGuild();
   else if(state.screen==='ladder') app.innerHTML = renderLadder();
   else if(state.screen==='legionid') app.innerHTML = renderLegionId();
+  else if(state.screen==='journal') app.innerHTML = renderJournal();
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
   else if(state.screen==='salvage') app.innerHTML = renderSalvage();
@@ -2102,6 +2151,7 @@ function renderHub(){
       <button class="btn" onclick="goCodex()">📖 Bestiary (${codexProgress().pct}%)</button>
       <button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>
       ${clearedStages().length?`<button class="btn" onclick="goTrials()">☠ Trials (${clearedStages().length})</button>`:''}
+      <button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>
     </div>
     <div class="row" style="margin-top:10px; align-items:center;">
       <button class="btn small" onclick="goGuild()">🛡 Guild</button>
@@ -3381,6 +3431,10 @@ function beginBattle(){
     terrainShifts: 0,
     awaitingInput: false,
     synLabels: { front:null, back:null },
+    dmgByUnitId: {},
+    lastKillId: null,
+    lowestSurvivorPct: null,
+    lowestSurvivorId: null,
   };
   state.battle.synLabels = {
     front: (playerUnits.find(u=>u.row==='front')||{}).synergyLabel || null,
@@ -3635,12 +3689,24 @@ function applyDamage(attacker, defender, isSkill){
     const b = state.battle;
     b.elemDamage[strikeElem] = (b.elemDamage[strikeElem]||0) + finalDmg;
     b.totalDamage = (b.totalDamage||0) + finalDmg;
+    b.dmgByUnitId[attacker.id] = (b.dmgByUnitId[attacker.id]||0) + finalDmg;
     checkTerrainShift();
   }
   if(attacker.side==='player' && finalDmg>0) chargeGauge(finalDmg/3);
   if(defender.side==='player' && finalDmg>0) chargeGauge(finalDmg/5);
+  /* War Journal: the closest a player unit came to fainting this battle. */
+  if(defender.side==='player' && finalDmg>0 && defender.hp>0){
+    const b = state.battle;
+    const pct = defender.hp / defender.maxHp;
+    if(b.lowestSurvivorPct===null || pct < b.lowestSurvivorPct){
+      b.lowestSurvivorPct = pct; b.lowestSurvivorId = defender.id;
+    }
+  }
 
-  if(defender.fainted && defender.side==='enemy') updateBossShield();
+  if(defender.fainted && defender.side==='enemy'){
+    updateBossShield();
+    if(attacker.side==='player') state.battle.lastKillId = attacker.id;
+  }
   if(!defender.fainted && finalDmg>0){
     if(attacker.burnOnHit && Math.random()<attacker.burnOnHit) setStatus(defender,'burn',3);
     if(attacker.stunOnHit && Math.random()<attacker.stunOnHit) setStatus(defender,'stun',1);
@@ -4057,6 +4123,89 @@ function battleStats(result){
   };
 }
 
+/* ================= WAR JOURNAL =================
+   A short recap written after every stage battle from what actually
+   happened in it: real numbers pulled off the fight that just ended, not a
+   template with blanks filled in. Duels, raids, trials and the tutorial
+   don't write entries — this is the campaign's own record.
+   ================================================= */
+const JOURNAL_CAP = 30;
+function journalAdd(entry){
+  if(!entry) return;
+  state.journal = Array.isArray(state.journal) ? state.journal : [];
+  state.journal.unshift(entry);
+  if(state.journal.length > JOURNAL_CAP) state.journal.length = JOURNAL_CAP;
+}
+function pickText(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+function battleUnitName(id){
+  const b = state.battle;
+  const u = b && id ? b.playerUnits.find(x=>x.id===id) : null;
+  return u ? u.name : null;
+}
+function battleJournalEntry(result){
+  const b = state.battle; if(!b) return null;
+  const win = result==='win';
+  const deep = isDeep(state.stage);
+  const label = deep ? `Depth ${deepDepth(state.stage)}` : `Stage ${state.stage}`;
+  const bossDef = bossForStage(state.stage);
+  const losses = b.playerUnits.filter(u=>u.fainted).length;
+  const rounds = b.rounds || 1;
+
+  let mvpId = null, mvpDmg = 0;
+  Object.keys(b.dmgByUnitId||{}).forEach(id=>{
+    if(b.dmgByUnitId[id] > mvpDmg){ mvpDmg = b.dmgByUnitId[id]; mvpId = id; }
+  });
+  const mvpName = mvpId ? battleUnitName(mvpId) : null;
+  const killerName = win ? battleUnitName(b.lastKillId) : null;
+
+  const sentences = [];
+  if(bossDef){
+    sentences.push(win
+      ? pickText([`${label} — ${bossDef.name} went down after ${rounds} round${rounds===1?'':'s'}.`,
+                  `${label}. ${rounds} round${rounds===1?'':'s'} of trading blows, and ${bossDef.name} finally stopped moving.`])
+      : pickText([`${label} — ${bossDef.name} broke the legion after ${rounds} round${rounds===1?'':'s'}.`,
+                  `${label}. The legion couldn't put ${bossDef.name} down — ${rounds} round${rounds===1?'':'s'}, then the retreat.`]));
+  } else {
+    sentences.push(win
+      ? pickText([`${label} cleared in ${rounds} round${rounds===1?'':'s'}.`,
+                  `The legion took ${label} in ${rounds} round${rounds===1?'':'s'}.`])
+      : pickText([`${label} ended in a rout after ${rounds} round${rounds===1?'':'s'}.`,
+                  `${rounds} round${rounds===1?'':'s'}, and ${label} broke the legion.`]));
+  }
+  if(mvpName){
+    sentences.push(pickText([
+      `${mvpName} carried the fight, dealing ${mvpDmg} of the damage.`,
+      `${mvpName} did the heaviest lifting — ${mvpDmg} damage on its own.`,
+    ]));
+  }
+  if(killerName && killerName!==mvpName){
+    sentences.push(pickText([
+      `${killerName} landed the finishing blow.`,
+      `It was ${killerName} that finished it.`,
+    ]));
+  }
+  if(b.lowestSurvivorId && b.lowestSurvivorPct!==null && b.lowestSurvivorPct<=0.4){
+    const survName = battleUnitName(b.lowestSurvivorId);
+    const pct = Math.round(b.lowestSurvivorPct*100);
+    if(survName){
+      sentences.push(pickText([
+        `${survName} came within an inch of fainting, dropping to ${pct}% HP.`,
+        `The closest call was ${survName}, who dropped to ${pct}% HP.`,
+      ]));
+    }
+  } else if(win && losses===0){
+    sentences.push(pickText([`Nobody in the legion took a serious hit.`, `A clean fight — no close calls.`]));
+  }
+  if(losses>0){
+    sentences.push(`${losses} beast${losses===1?'':'s'} fainted before it was over.`);
+  }
+
+  return {
+    id: uid(), stage: state.stage, deep, win, boss: bossDef ? bossDef.name : null,
+    text: sentences.join(' '), at: Date.now(),
+  };
+}
+
 function endBattle(result){
   const b = state.battle;
   b.result = result;
@@ -4179,6 +4328,7 @@ function endBattle(result){
     const levelled = awardExp(b.playerUnits, expGain);
     state.lastResult = { win:false, expGain, levelled, dailyDone };
   }
+  journalAdd(battleJournalEntry(result));
   autosave();
   state.screen = 'result';
   sfx(result==='win' ? 'victory' : 'defeat');
@@ -4415,6 +4565,7 @@ function renderResult(){
       <p>The forward base burns behind you. Texel breathes again — the tribes hold the surface, and the Rustbound advance is broken.</p>
       <div class="storytext">But the gate opened onto a stairwell, and the stairwell goes down. Whatever built the horde is still down there, still building.</div>
       <p class="dim">Your legion, its salvage and every splice carry onward. The Deep scales without end: elite waves every fifth depth, richer wreckage, and recruits enough to finish an evolution ladder.</p>
+      <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
       <div class="row" style="justify-content:center; margin-top:14px;">
         <button class="btn primary" style="font-size:22px;" onclick="advanceStage()">⬇ DESCEND INTO THE DEEP</button>
       </div>
@@ -4435,6 +4586,7 @@ function renderResult(){
       ${(r.favorGains && Object.keys(r.favorGains).length) ? `<p style="color:var(--nature)">🏕 Favour earned: ${Object.keys(r.favorGains).map(e=>`${TRIBES[e].emoji} ${TRIBES[e].name} +${r.favorGains[e]}`).join(', ')}</p>` : ''}
       ${(r.newChampions && r.newChampions.length) ? `<p style="color:var(--gold)">★ ${r.newChampions.map(e=>TRIBES[e].name).join(' and ')} will send ${r.newChampions.length===1?'a champion':'champions'} — visit the Tribes camp.</p>` : ''}
       ${r.dom ? `<p class="dim">📡 The Rustbound log your <b>${r.dom.toUpperCase()}</b> assault. Next deployment they will expect <b>${(r.nextAdapt||r.dom).toUpperCase()}</b>.</p>` : ''}
+      <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
       <button class="btn primary" style="margin-top:10px;" onclick="advanceStage()">${isDeep(state.stage)?'Descend further →':'Continue →'}</button>
     </div>`;
   }
@@ -4445,6 +4597,7 @@ function renderResult(){
     <p class="dim">Your survivors studied the enemy through the rout — each deployed monster gained ${r.expGain} EXP.</p>
     ${r.levelled && r.levelled.length ? `<p style="color:var(--gold)">⬆ Level up: ${r.levelled.join(', ')}</p>` : ''}
     <p class="dim">Adjust your formation, re-plate your beasts, and go again.</p>
+    <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
     <button class="btn primary" style="margin-top:10px;" onclick="retryStage()">Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →</button>
   </div>`;
 }

@@ -50,6 +50,7 @@ run guild-hall      dom-storage-server.js "$H/assert.js" "$S/12-guild-hall.js"
 run ai-audio-coach  dom-storage-server.js "$H/assert.js" "$S/13-ai-audio-tutorial.js"
 run harvest-codex   dom-storage-server.js "$H/assert.js" "$S/14-harvest-codex-tactical.js"
 run legion-identity dom-storage-server.js "$H/assert.js" "$S/15-legion-identity.js"
+run war-journal     dom-storage-server.js "$H/assert.js" "$S/16-war-journal.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"
