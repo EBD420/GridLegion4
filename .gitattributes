@@ -1,0 +1,11 @@
+# Keep line endings sane across Windows, Linux and CI.
+* text=auto
+
+# Shell scripts MUST stay LF — CRLF breaks the shebang on Linux
+# ("bad interpreter: /usr/bin/env bash^M").
+*.sh text eol=lf
+
+# These are read by node, which doesn't care, but keep them consistent.
+*.js  text eol=lf
+*.md  text eol=lf
+*.html text eol=lf
