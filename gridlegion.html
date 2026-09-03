@@ -894,18 +894,18 @@ function guildFetch(){
     });
 }
 function guildCreate(name, tag){
-  return rpc('create_guild', { p_name:name, p_tag:tag, p_display:state.profileName||'Commander' })
+  return rpc('create_guild', { p_name:name, p_tag:tag, p_display:legionBanner() })
     .then(r=>{ if(r.ok) return guildFetch().then(()=>({ok:true})); return r; });
 }
 function guildJoin(tag){
-  return rpc('join_guild', { p_tag:tag, p_display:state.profileName||'Commander' })
+  return rpc('join_guild', { p_tag:tag, p_display:legionBanner() })
     .then(r=>{ if(r.ok) return guildFetch().then(()=>({ok:true})); return r; });
 }
 /* Publish this player's own stats so the roster shows something meaningful. */
 function guildSync(){
   if(!signedIn() || !social.guild) return Promise.resolve({ok:false});
   return rpc('sync_member_profile', {
-    p_display: state.profileName||'Commander',
+    p_display: legionBanner(),
     p_power: formationPower(),
     p_depth: isDeep(state.stage) ? deepDepth(state.stage) : 0,
     p_stage: state.stage,
@@ -938,7 +938,7 @@ function raidStart(){ return rpc('start_raid', {}).then(r=>r.ok?raidFetch().then
    the same instant must not clobber each other's HP write. */
 function raidContribute(dmg){
   const scaled = hasPerk('raid') ? dmg*1.25 : dmg;
-  return rpc('contribute_raid', { p_damage: Math.max(0, Math.round(scaled)), p_display: state.profileName||'Commander' })
+  return rpc('contribute_raid', { p_damage: Math.max(0, Math.round(scaled)), p_display: legionBanner() })
     .then(r=>r.ok?raidFetch().then(()=>({ok:true, body:r.body})):r);
 }
 
@@ -966,7 +966,7 @@ function formationPower(){
 }
 function ladderPublish(){
   return rpc('publish_formation', {
-    p_display: state.profileName||'Commander',
+    p_display: legionBanner(),
     p_formation: ladderSnapshot(),
     p_power: formationPower(),
   });
@@ -1020,6 +1020,7 @@ function serializeSave(){
   return {
     v: SAVE_VERSION,
     name: state.profileName || 'Legion',
+    emblem: Array.isArray(state.emblem) ? state.emblem.slice(0,3) : [],
     savedAt: Date.now(),
     stage: state.stage,
     bestDepth: state.bestDepth || 0,
@@ -1078,6 +1079,7 @@ function applySave(d, slot){
   const fixRow = r => [0,1,2].map(i => (typeof r[i]==='string' && live.indexOf(r[i])>=0) ? r[i] : null);
   state.slot = (typeof slot==='number') ? slot : null;
   state.profileName = (typeof d.name==='string' && d.name.trim()) ? d.name.trim().slice(0,18) : 'Legion';
+  state.emblem = Array.isArray(d.emblem) ? d.emblem.filter(k=>PARTS[k]).slice(0,3) : [];
   state.stage = Math.max(1, Math.floor(d.stage));
   state.bestDepth = (typeof d.bestDepth==='number' && d.bestDepth>=0) ? Math.floor(d.bestDepth) : 0;
   state.roster = roster;
@@ -1280,6 +1282,7 @@ let state = {
   trial: null,
   slot: null,
   profileName: 'Legion',
+  emblem: [],
   bestDepth: 0,
   saveState: 'none',
   transfer: null,
@@ -1314,6 +1317,7 @@ function initGame(){
   const starters = ['emberling','aqualing','terrafang'].map(id=>newMonster(id,1,1));
   state.roster = starters;
   state.parts = [];
+  state.emblem = [];
   state.intel = { history: [], wins: 0 };
   state.formation.front = starters.map(m=>m.uid);
   state.formation.back = [null,null,null];
@@ -1641,6 +1645,49 @@ function codexProgress(){
   Object.keys(t).forEach(k=>{ seen += codexCount(k); total += t[k]; });
   return { seen, total, pct: total ? Math.round((seen/total)*100) : 0 };
 }
+
+/* ================= LEGION IDENTITY =================
+   A name plus a banner assembled from salvage parts the player has actually
+   unlocked (installed at least once). Purely cosmetic, but it's what other
+   commanders see in the guild roster, the raid board and the ladder.
+   The banner rides along inside the existing "display name" text sent to
+   the cloud, so no schema change is needed for it to show up there.
+   ==================================================== */
+function unlockedPartKeys(){
+  const c = codex();
+  return Object.keys(PARTS).filter(k=>c.parts && c.parts[k]);
+}
+function emblemGlyph(keys){
+  return (Array.isArray(keys)?keys:[]).map(k=>PARTS[k]?PARTS[k].emoji:'').filter(Boolean).join('');
+}
+function legionBanner(){
+  const g = emblemGlyph(state.emblem);
+  const name = (state.profileName||'Commander').trim() || 'Commander';
+  return g ? (g+' '+name) : name;
+}
+function goLegionId(){ state.screen='legionid'; sfx('click'); render(); }
+function toggleEmblemPart(k){
+  if(!PARTS[k] || unlockedPartKeys().indexOf(k)<0) return;
+  const cur = Array.isArray(state.emblem) ? state.emblem.slice() : [];
+  const i = cur.indexOf(k);
+  if(i>=0) cur.splice(i,1);
+  else if(cur.length<3) cur.push(k);
+  else { sfx('click'); return; }
+  state.emblem = cur;
+  autosave();
+  sfx('click');
+  render();
+}
+function setLegionName(raw){
+  const name = String(raw||'').trim().slice(0,18);
+  state.profileName = name || 'Commander';
+  autosave();
+}
+function doSaveLegionName(){
+  setLegionName(readInput('idn_name'));
+  sfx('click');
+  render();
+}
 /* Record everything a battle puts in front of the player. */
 function codexRecordBattle(){
   const b = state.battle; if(!b) return;
@@ -1770,6 +1817,7 @@ function render(){
   else if(state.screen==='codex') app.innerHTML = renderCodex();
   else if(state.screen==='guild') app.innerHTML = renderGuild();
   else if(state.screen==='ladder') app.innerHTML = renderLadder();
+  else if(state.screen==='legionid') app.innerHTML = renderLegionId();
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
   else if(state.screen==='salvage') app.innerHTML = renderSalvage();
@@ -1796,7 +1844,7 @@ function goProfiles(){ state.screen='profiles'; state.transfer=null; state.confi
 function saveStatusText(){
   if(state.slot===null) return hasStorage() ? 'Not bound to a legion slot — progress will not be kept.' : 'Saving unavailable in this browser — use a transfer code.';
   if(state.saveState==='unsaved') return '⚠ could not write to storage';
-  const base = `${escapeHtml(state.profileName)} · autosaving`;
+  const base = `${escapeHtml(legionBanner())} · autosaving`;
   return cloudConfigured() ? `${base} · ${cloudStatusText()}` : base;
 }
 function manualSave(){
@@ -2063,6 +2111,7 @@ function renderHub(){
       <button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>
       <button class="btn small" onclick="manualSave()">💾 Save</button>
       <button class="btn small" onclick="goTransfer()">🔗 Transfer Code</button>
+      <button class="btn small" onclick="goLegionId()">🎖 Identity</button>
       <button class="btn small" onclick="leaveToProfiles()">👥 Legions</button>
       ${cloudConfigured()?`<button class="btn small" onclick="goAccount()">👤 Account</button>`:''}
       <span class="dim" style="font-size:15px;">${saveStatusText()}</span>
@@ -2431,6 +2480,32 @@ function startDuel(){
   beginBattle();
 }
 function endDuel(){ state.duel=null; state.battle=null; state.screen='ladder'; render(); }
+
+/* ============ LEGION IDENTITY ============ */
+function renderLegionId(){
+  const unlocked = unlockedPartKeys();
+  const chips = Object.keys(PARTS).map(k=>{
+    const P = PARTS[k], has = unlocked.indexOf(k)>=0, on = (state.emblem||[]).indexOf(k)>=0;
+    return `<div class="pcard ${on?'selected':''}" style="width:130px; ${has?'cursor:pointer;':'cursor:default; opacity:0.35;'}" ${has?`onclick="toggleEmblemPart('${k}')"`:''}>
+      <div class="pname">${has?P.emoji+' '+escapeHtml(P.name):'🔒 ???'}</div>
+      <div class="dim" style="font-size:13px;">${has?(on?'on your banner — tap to remove':'tap to add'):'Install this part on a beast to unlock it.'}</div>
+    </div>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">LEGION IDENTITY</h2>
+    <p class="dim">Your name and banner travel with you — the guild roster, the raid board and the ladder all show it.</p>
+    <div class="dim" style="font-size:16px; margin-top:12px;">Legion name</div>
+    <input id="idn_name" class="tinput" maxlength="18" value="${escapeHtml(state.profileName||'')}" placeholder="Ironpaw Legion">
+    <button class="btn" style="margin-top:8px;" onclick="doSaveLegionName()">Save name</button>
+    <div class="dim" style="font-size:16px; margin-top:18px;">Banner — pick up to 3 unlocked salvage parts</div>
+    <div class="row" style="margin-top:6px;">${chips}</div>
+    <p class="dim" style="margin-top:12px; font-size:15px;">Preview:
+      <span style="color:var(--gold); font-size:19px;">${escapeHtml(legionBanner())}</span>
+    </p>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
 
 function renderMissions(){
   const d = ensureDailies();

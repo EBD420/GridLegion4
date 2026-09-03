@@ -48,6 +48,7 @@ const SUITES = [
   { label:'guild-hall',      harness:'dom-storage-server.js', assert:true, files:['12-guild-hall.js'] },
   { label:'ai-audio-coach',  harness:'dom-storage-server.js', assert:true, files:['13-ai-audio-tutorial.js'] },
   { label:'harvest-codex',   harness:'dom-storage-server.js', assert:true, files:['14-harvest-codex-tactical.js'] },
+  { label:'legion-identity', harness:'dom-storage-server.js', assert:true, files:['15-legion-identity.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

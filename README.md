@@ -30,6 +30,9 @@ runs endlessly with elite waves every fifth depth.
 
 **Meta.** Six tribes whose favour unlocks champions and blessings; Trials that replay
 cleared stages under stackable handicaps; daily scavenger orders drawn from a date seed.
+A **Legion Identity** screen lets you rename your legion and assemble a banner from
+salvage parts you've actually fielded — it's what shows up for you in the guild roster,
+the raid board and the ladder.
 
 **Optional online.** Accounts and cloud saves, guilds with levels and perks, a shared
 raid boss, and an asynchronous PvP ladder. All of it is off until configured, and the
@@ -50,13 +53,14 @@ to the ladder.
 ## Tests
 
 ```bash
-./tests/run.sh
+node tests/run.js      # any platform, needs only node
+./tests/run.sh         # same thing, if you prefer bash
 ```
 
-497 assertions, no dependencies beyond `node`. The suites extract the script out of
+652 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.
 
-Run it after any change to the game file; the script exits non-zero on failure, so it
-works as a pre-commit hook or in CI.
+Run it after any change to the game file; both runners exit non-zero on failure, so
+either works as a pre-commit hook or in CI.
