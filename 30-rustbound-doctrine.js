@@ -104,6 +104,10 @@ state.doctrine = { elementTally:{}, formationTally:{front:0,back:0}, kills:{}, w
 let B = setupFight([newMonster('emberling',20,1,{key:'resilient'}), newMonster('aqualing',20,1,{key:'resilient'})], 3);
 const atk = B.playerUnits[0];
 const victim = B.enemyUnits[0];
+// Give every other enemy a huge HP buffer so a big overkill can never Cascade
+// past victim and land a second, unwanted kill — this test is about kill
+// ATTRIBUTION, not Cascade Overkill (see 33-cascade-overkill.js for that).
+B.enemyUnits.forEach(u=>{ if(u!==victim){ u.hp = 999999; u.maxHp = 999999; } });
 victim.dodge=0; atk.missChance=0; victim.shield=false; victim.firstHitReduction=false; victim.hp=1;
 applyDamage(atk, victim, false);
 ok('the kill lands and is attributed on the battle object first', B.killsBySpecies[atk.speciesId]===1, B.killsBySpecies);

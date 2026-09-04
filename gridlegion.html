@@ -269,6 +269,7 @@
   .terrain-banner{ font-size:15px; color:var(--wind); border:1px dashed var(--border); padding:6px 8px; margin-bottom:10px; }
   .intel-banner{ font-size:16px; color:var(--rust); border:1px dashed var(--rust); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(226,136,74,0.08); }
   .doctrine-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.08); }
+  .threat-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .gauge-wrap{ margin-bottom:12px; }
   .gauge-label{ font-size:14px; color:var(--gold); margin-bottom:3px; }
   .gauge-bg{ height:14px; background:#050709; border:1px solid var(--border); position:relative; box-shadow: inset 0 1px 4px rgba(0,0,0,0.7); }
@@ -476,9 +477,24 @@ function isForgedKey(key){ return typeof key==='string' && key.length>FORGE_SUFF
    guaranteed and cosmetically marked, not that it's stronger. ---- */
 const ACE_SUFFIX = '_ace';
 function isAceKey(key){ return typeof key==='string' && key.length>ACE_SUFFIX.length && key.slice(-ACE_SUFFIX.length)===ACE_SUFFIX; }
+/* ---- The Vanguard Bounty: a rare, named elite embedded specifically in an
+   Elite Wave (see applyVanguardRoll below — Aces and Vanguards are mutually
+   exclusive by construction, since applyAceRoll explicitly skips elite
+   stages). Unlike an Ace, a Vanguard's drop is NOT guaranteed on death: it
+   only pays out if the Vanguard is the very last enemy left standing on its
+   side at the moment it falls (checkVanguardBounty, called from the same
+   onEnemyFainted funnel Aces use, so it fires correctly however the kill
+   happened — a direct hit, a cascade splash, a burn tick). The reward is a
+   genuinely stronger part (a small real stat bump, see partInfo), not just a
+   cosmetic marker — the payoff for reading the whole formation instead of
+   focus-firing the biggest threat first. ---- */
+const VANGUARD_SUFFIX = '_vanguard';
+const VANGUARD_PCT_BONUS = 0.03;
+function isVanguardKey(key){ return typeof key==='string' && key.length>VANGUARD_SUFFIX.length && key.slice(-VANGUARD_SUFFIX.length)===VANGUARD_SUFFIX; }
 function baseKeyOf(key){
   if(isForgedKey(key)) return key.slice(0, -FORGE_SUFFIX.length);
   if(isAceKey(key)) return key.slice(0, -ACE_SUFFIX.length);
+  if(isVanguardKey(key)) return key.slice(0, -VANGUARD_SUFFIX.length);
   return key;
 }
 /* Resolves a state.parts / monster.parts key (raw, forged, or ace) to full
@@ -502,6 +518,12 @@ function partInfo(key){
     return {
       name: 'Ace-Marked ' + base.name, emoji: base.emoji, element: base.element, desc: base.desc,
       stat: base.stat, pct: base.pct, corruption: base.corruption, ace: true,
+    };
+  }
+  if(isVanguardKey(key)){
+    return {
+      name: 'Vanguard Trophy: ' + base.name, emoji: base.emoji, element: base.element, desc: base.desc,
+      stat: base.stat, pct: Math.round((base.pct+VANGUARD_PCT_BONUS)*100)/100, corruption: base.corruption, vanguard: true,
     };
   }
   return base;
@@ -1983,6 +2005,7 @@ let state = {
   bondCounts: {},
   doctrine: { elementTally:{}, formationTally:{front:0,back:0}, kills:{}, wins:0 },
   archive: {},
+  gambit: null,
 };
 
 function newMonster(speciesId, level=1, tier=1, trait){
@@ -2049,6 +2072,7 @@ function initGame(){
   state.bondCounts = {};
   state.doctrine = { elementTally:{}, formationTally:{front:0,back:0}, kills:{}, wins:0 };
   state.archive = {};
+  state.gambit = null;
 }
 
 function getSpeciesData(speciesId, tier){
@@ -2799,6 +2823,7 @@ function render(){
   else if(state.screen==='journal') app.innerHTML = renderJournal();
   else if(state.screen==='archive') app.innerHTML = renderArchive();
   else if(state.screen==='depthchart') app.innerHTML = renderDepthChart();
+  else if(state.screen==='gambit') app.innerHTML = renderGambit();
   else if(state.screen==='commander') app.innerHTML = renderCommanderRank();
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
@@ -3207,7 +3232,7 @@ function renderHub(){
     </div>
   </div>
   <div class="panel" style="text-align:center;">
-    <button class="btn primary" style="font-size:24px;" ${filled===0?'disabled':''} onclick="beginBattle()">⚡ DEPLOY TO BATTLE ⚡</button>
+    <button class="btn primary" style="font-size:24px;" ${filled===0?'disabled':''} onclick="goGambitOrBattle()">⚡ DEPLOY TO BATTLE ⚡</button>
     ${filled===0?'<p class="dim">Assign at least one monster to your formation first.</p>':''}
   </div>`;
 }
@@ -4010,7 +4035,7 @@ function renderSalvage(){
     const d = partInfo(p.key);
     const sel = state.selectedPart===p.uid;
     return `<div class="pcard ${sel?'selected':''}" onclick="selectPart('${p.uid}')">
-      <div class="pname">${d.forged?'🔨 ':''}${d.ace?'⭐ ':''}${d.emoji} ${d.name}</div>
+      <div class="pname">${d.forged?'🔨 ':''}${d.ace?'⭐ ':''}${d.vanguard?'🛡️ ':''}${d.emoji} ${d.name}</div>
       <div>+${Math.round(d.pct*100)}% ${STAT_LABEL[d.stat]}${d.forged?` · +${Math.round(d.bonusPct*100)}% ${STAT_LABEL[d.bonusStat]}`:''}</div>
       <span class="elem-tag elem-${d.element}">+${d.element}</span>
       <div style="color:var(--rust); font-size:13px;">⚙ +${d.corruption} rust</div>
@@ -4027,7 +4052,7 @@ function renderSalvage(){
     for(let i=0;i<slots;i++){
       const k = (m.parts||[])[i];
       chips += k
-        ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${isForgedKey(k)?'🔨':''}${isAceKey(k)?'⭐':''}${partInfo(k).emoji} ✖</span>`
+        ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${isForgedKey(k)?'🔨':''}${isAceKey(k)?'⭐':''}${isVanguardKey(k)?'🛡️':''}${partInfo(k).emoji} ✖</span>`
         : `<span class="slotchip" onclick="installPart('${m.uid}')">+ empty</span>`;
     }
     const g = st.grafts;
@@ -4248,6 +4273,12 @@ function renderFormation(){
 
   const frontSyn = formationRowSynergyLabel('front');
   const backSyn = formationRowSynergyLabel('back');
+  const threat = previewFirstThreat();
+  const threatHtml = threat ? `
+  <div class="panel">
+    <h2 class="section">🎯 THREAT PREVIEW</h2>
+    <div class="threat-banner">${threat.threatEmoji} ${escapeHtml(threat.threatName)} reads as the fastest on their side, and would likely open on your ${threat.targetEmoji} ${escapeHtml(threat.targetName)} (${threat.targetRow} row) with a <b>${threat.threatElement}</b> strike. A scouting read, not a promise — the real enemy team is drawn fresh the moment the fight starts.</div>
+  </div>` : '';
 
   return `
   <div class="panel">
@@ -4260,6 +4291,7 @@ function renderFormation(){
       ${backSyn?`<div class="synergy-tag">✨ ${backSyn}</div>`:''}
     </div>
   </div>
+  ${threatHtml}
   <div class="panel">
     <h2 class="section">BENCH ${state.formSelected?'<span class="dim">(tap a slot to place)</span>':''}</h2>
     <div class="row">${benchCards || '<p class="dim">Everyone is deployed.</p>'}</div>
@@ -4267,6 +4299,49 @@ function renderFormation(){
   <div class="panel footer-nav">
     <button class="btn" onclick="state.formSelected=null; state.screen='hub'; render();">← Back to Hub</button>
   </div>`;
+}
+/* ---- Threat Preview ----
+   A deliberately partial pre-battle tell: which of your units the enemy's
+   fastest fielded unit would most likely open on, and with what element —
+   computed by actually calling the real targeting logic (getValidTargets +
+   scoreTarget), the same functions enemyAct() itself uses for the real first
+   move of the battle. It works by building one throwaway sample enemy team
+   and briefly pointing state.battle at a scratch object so those functions
+   have something to read; nothing here is persisted, and state.battle is
+   restored immediately after (try/finally, in case anything above throws).
+   Since buildEnemyUnits/buildPlayerUnits are randomized, this is a read on
+   one likely draw, not a guarantee of the exact team the fight will use. */
+function previewFirstThreat(){
+  if(state.duel || state.raidRun || state.trial) return null;
+  const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+  if(!filled) return null;
+  const savedBattle = state.battle;
+  let result = null;
+  try{
+    const terrain = terrainForStage(state.stage);
+    const adapted = currentAdaptation();
+    const platingElem = adapted || (hasMod('hardened') ? deployedDominantElement() : null);
+    const usePlating = (platingActive() || hasMod('hardened')) && !!platingElem;
+    const tier = aiTier();
+    const playerUnits = buildPlayerUnits(terrain);
+    const enemyUnits = buildEnemyUnits(state.stage, terrain, adapted, usePlating, platingElem);
+    if(enemyUnits && enemyUnits.length){
+      const threatUnit = enemyUnits.slice().sort((a,c)=>c.spd-a.spd)[0];
+      state.battle = { playerUnits, enemyUnits, result:null };
+      const targets = getValidTargets(threatUnit);
+      let target = targets[0], best = -Infinity;
+      targets.forEach(t=>{ const sc = scoreTarget(threatUnit, t, tier); if(sc>best){ best=sc; target=t; } });
+      if(target){
+        result = {
+          threatName: threatUnit.name, threatEmoji: threatUnit.emoji, threatElement: threatUnit.element,
+          targetName: target.name, targetEmoji: target.emoji, targetRow: target.row,
+        };
+      }
+    }
+  } finally {
+    state.battle = savedBattle;
+  }
+  return result;
 }
 function selectBenchMonster(u){ state.formSelected = (state.formSelected===u) ? null : u; render(); }
 function placeSelected(row, idx){
@@ -4285,7 +4360,8 @@ function baseUnitDefaults(){
     dodge:0, burnOnHit:0, stunOnHit:0, regen:0, slowImmune:false,
     firstHitReduction:false, firstHitUsed:false,
     missChance:0, backfireChance:0, burnImmune:false, stunImmune:false,
-    critBonus:0, baneElem:null, resilient:false,
+    critBonus:0, baneElem:null, resilient:false, critVulnerability:0,
+    gambitFirstCrit:false, gambitFirstCritUsed:false,
     attackElements:[], hybrid:false, traitDodge:0, traitRegen:0, traitSlowImmune:false,
     plating:null, platingPct:0,
     corruption:0, glitchChance:0, defectChance:0,
@@ -4452,6 +4528,7 @@ function buildPlayerUnits(terrain){
   const units = [];
   const councilOpt = councilLeadingOption();
   const bossFight = !!bossForStage(state.stage);
+  const gambitId = (state.gambit && state.gambit.picked) || null;
   ['front','back'].forEach(row=>{
     state.formation[row].forEach(u=>{
       if(!u) return;
@@ -4486,6 +4563,12 @@ function buildPlayerUnits(terrain){
       if(bless==='wind')   unit.traitDodge = Math.max(unit.traitDodge, 0.08);
       if(bless==='water' && unit.row==='front') unit.shield = true;
       if(hasMod('corrosion')) applyRust(unit, 20);
+      /* Loadout Gambit: a one-battle, self-chosen edge (see rollGambitChoices/
+         GAMBITS). Stat tweaks land on the b* base fields so refreshSynergies
+         (called below) folds them into the row-synergy math correctly. */
+      if(gambitId==='opening_strike' && row==='front') unit.gambitFirstCrit = true;
+      if(gambitId==='bulwark') unit.bDef = Math.round(unit.bDef*1.10);
+      if(gambitId==='adrenaline'){ unit.bSpd = Math.round(unit.bSpd*1.15); unit.critVulnerability = (unit.critVulnerability||0) + 0.05; }
       if(st.trait){
         if(st.trait.key==='keen') unit.critBonus = 0.08;
         if(st.trait.key==='bane') unit.baneElem = st.trait.elem;
@@ -4561,6 +4644,7 @@ function buildEnemyUnits(stage, terrain, adapted, usePlating, platingElem){
     units.push(unit);
   }
   applyAceRoll(units, stage);
+  applyVanguardRoll(units, stage);
   return units;
 }
 
@@ -4600,12 +4684,51 @@ function grantAceDrop(unit){
   state.parts.push(drop);
   logMsg(`⭐ ${unit.name} falls and leaves behind ${partInfo(drop.key).name}!`);
 }
+/* Rolled specifically on Elite Waves (see buildEnemyUnits) — Aces skip elite
+   stages entirely, so this never competes with one for the same wave. Marks
+   one unit as the escort's Vanguard: noticeably tougher, and clearly named
+   so it can be read and planned around before the fight even starts (Threat
+   Preview will surface it if it happens to be the fastest on the field). */
+const VANGUARD_CHANCE = 0.35;
+const VANGUARD_MULT = { hp:1.5, atk:1.25, def:1.2, spd:1.05 };
+function applyVanguardRoll(units, stage){
+  if(!isEliteStage(stage) || units.length < 2) return;
+  if(units.some(u=>u.isAce)) return;   // belt-and-suspenders; Aces already never roll on elite stages
+  if(Math.random() >= VANGUARD_CHANCE) return;
+  const u = units[Math.floor(Math.random()*units.length)];
+  u.isVanguard = true;
+  u.name = 'Vanguard ' + u.name;
+  u.bHp = Math.round(u.bHp*VANGUARD_MULT.hp); u.bAtk = Math.round(u.bAtk*VANGUARD_MULT.atk);
+  u.bDef = Math.round(u.bDef*VANGUARD_MULT.def); u.bSpd = Math.round(u.bSpd*VANGUARD_MULT.spd);
+  u.maxHp = u.bHp; u.hp = u.bHp; u.atk = u.bAtk; u.def = u.bDef; u.spd = u.bSpd;
+}
+/* The Vanguard Bounty: unlike an Ace, this is NOT guaranteed. It only pays
+   out if the Vanguard is the very last enemy left standing on its side at
+   the moment it falls — checked live against the battle's current state, so
+   it correctly resolves however the kill actually happened. Dying first or
+   mid-pack while escorts remain gives nothing at all. */
+function grantVanguardBounty(unit){
+  if(!unit || !unit.speciesKey) return;
+  if(state.parts.length>=14){ logMsg(`🛡️ ${unit.name} falls at last — but the salvage bay is full and the trophy is lost.`); return; }
+  const drop = { uid: uid(), key: unit.speciesKey+VANGUARD_SUFFIX };
+  state.parts.push(drop);
+  logMsg(`🛡️ ${unit.name} falls — the very last of its escort — you claim ${partInfo(drop.key).name}!`);
+}
+function checkVanguardBounty(unit){
+  if(!unit.isVanguard || unit.vanguardBountyGiven) return;
+  const b = state.battle; if(!b) return;
+  const stillStanding = b.enemyUnits.some(u=>u.id!==unit.id && !u.fainted);
+  unit.vanguardBountyGiven = true;   // one-shot check either way: a fainted unit can never re-trigger it
+  if(stillStanding) return;
+  grantVanguardBounty(unit);
+}
 /* Every enemy-fainted site (a normal hit via applyDamage, a burn tick via
-   tickStatusStart) routes through here so the shield check and the Ace drop
-   never need duplicating. */
+   tickStatusStart, a Cascade Overkill splash) routes through here so the
+   shield check and the Ace/Vanguard payouts never need duplicating. */
 function onEnemyFainted(unit){
   updateBossShield();
   if(unit.isAce) grantAceDrop(unit);
+  checkVanguardBounty(unit);
 }
 
 /* The commander sits in the back, untouchable, while any pylon still stands.
@@ -4747,6 +4870,69 @@ function buildTutorialEnemies(terrain){
   return units;
 }
 
+/* ---- Loadout Gambit ----
+   Before a genuinely hard fight (a Warlord, Foundry Core, the Fracture
+   Engine, or an Elite Wave — anywhere else this would just be fatigue),
+   offer three blind, one-time modifiers drawn from the pool below; picking
+   one applies it for that single battle only, never longer. Deliberately
+   excluded from duels, raids and trials — each of those already has its own
+   separate difficulty/reward layer, and stacking a fourth on top would just
+   be noise. Every modifier is a genuine trade, not a pure upside. */
+const GAMBITS = {
+  opening_strike: { name:'Opening Strike', desc:"Your front row's very first hit each battle lands as a guaranteed critical." },
+  overclock:      { name:'Overclock', desc:'Legion Gauge charges 25% faster this fight — but every hit you land deals 8% less damage.' },
+  bulwark:        { name:'Bulwark Doctrine', desc:"Your whole legion's DEF is up 10% this fight — but Legion Gauge charges 15% slower." },
+  adrenaline:     { name:'Adrenaline Rush', desc:"Your whole legion's SPD is up 15% this fight — but you're 5 points more likely to be critically hit." },
+  focused_fire:   { name:'Focused Fire', desc:'Your hits deal 10% more to anything already below half HP — but 6% less to anything still at full.' },
+};
+const GAMBIT_IDS = Object.keys(GAMBITS);
+function isHardFight(stage){
+  if(state.duel || state.raidRun || state.trial) return false;
+  return !!bossForStage(stage) || isEliteStage(stage);
+}
+function rollGambitChoices(){
+  const pool = GAMBIT_IDS.slice();
+  const choices = [];
+  while(choices.length<3 && pool.length){
+    const i = Math.floor(Math.random()*pool.length);
+    choices.push(pool.splice(i,1)[0]);
+  }
+  state.gambit = { stage: state.stage, choices, picked: null };
+}
+function goGambitOrBattle(){
+  if(isHardFight(state.stage)){
+    rollGambitChoices();
+    state.screen = 'gambit';
+    render();
+  } else {
+    beginBattle();
+  }
+}
+function pickGambit(id){
+  if(!state.gambit || state.gambit.picked || state.gambit.choices.indexOf(id)<0) return;
+  state.gambit.picked = id;
+  beginBattle();
+}
+function cancelGambit(){ state.gambit = null; state.screen = 'hub'; render(); }
+function renderGambit(){
+  const g = state.gambit;
+  if(!g){ state.screen = 'hub'; return renderHub(); }
+  const cards = g.choices.map(id=>{
+    const gm = GAMBITS[id];
+    return `<button class="btn" style="text-align:left; padding:14px; margin-bottom:8px; width:100%; height:auto;" onclick="pickGambit('${id}')">
+      <div style="font-weight:bold; color:var(--gold);">${gm.name}</div>
+      <div class="dim" style="font-size:13px; margin-top:4px; white-space:normal;">${gm.desc}</div>
+    </button>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">LOADOUT GAMBIT</h2>
+    <p class="dim">This one's a hard fight. Pick one edge to carry into it — every choice cuts both ways, and it only lasts this battle.</p>
+  </div>
+  <div class="panel">${cards}</div>
+  <div class="panel footer-nav"><button class="btn" onclick="cancelGambit()">← Back to Hub</button></div>`;
+}
+
 function beginBattle(){
   const terrain = terrainForStage(state.stage);
   const adapted = currentAdaptation();
@@ -4754,8 +4940,10 @@ function beginBattle(){
   // Rustbound have any intel on you — otherwise the handicap does nothing early.
   const platingElem = adapted || (hasMod('hardened') ? deployedDominantElement() : null);
   const usePlating = (platingActive() || hasMod('hardened')) && !!platingElem;
-  const playerUnits = buildPlayerUnits(terrain);
+  const playerUnits = buildPlayerUnits(terrain);   // reads state.gambit.picked internally, if set
   const duel = state.duel;
+  const gambitId = (state.gambit && state.gambit.picked) || null;
+  state.gambit = null;   // one-time: already folded into playerUnits above and state.battle.gambit below
   state.battle = {
     playerUnits,
     enemyUnits: duel ? buildDuelUnits(duel.formation, terrain)
@@ -4773,6 +4961,7 @@ function beginBattle(){
     lastKillId: null,
     lowestSurvivorPct: null,
     lowestSurvivorId: null,
+    gambit: gambitId,
   };
   state.battle.synLabels = {
     front: (playerUnits.find(u=>u.row==='front')||{}).synergyLabel || null,
@@ -4804,6 +4993,10 @@ function beginBattle(){
   if(codexBonusActive('terrains') && state.battle.gauge<100){
     state.battle.gauge = Math.min(100, state.battle.gauge + 10);
     logMsg(`🗺 Terrain Mastery: every battlefield charted — Legion Gauge starts +10%.`);
+  }
+  if(gambitId){
+    const gm = GAMBITS[gambitId];
+    logMsg(`🎲 Loadout Gambit — ${gm.name}: ${gm.desc}`);
   }
   codexRecordBattle();
   state.screen = 'battle';
@@ -4937,7 +5130,7 @@ function getValidTargets(unit){
   return front.concat(back);
 }
 
-function computeDamage(attacker, defender, isSkill){
+function computeDamage(attacker, defender, isSkill, forceCrit){
   const baseAtk = isSkill ? attacker.atk*1.6 : attacker.atk;
   let dmg = Math.max(1, Math.round(baseAtk - defender.def*0.5));
   const m = multiplierVs(attacker, defender);
@@ -4953,8 +5146,14 @@ function computeDamage(attacker, defender, isSkill){
     if(dl2.indexOf(attacker.baneElem)>=0) dmg = Math.round(dmg*1.15);
   }
   if(hasMod('glass')) dmg = Math.round(dmg*1.5);
+  /* Loadout Gambit: a one-battle, self-chosen edge (see beginBattle/rollGambitChoices). */
+  const gambit = state.battle && state.battle.gambit;
+  if(gambit==='overclock' && attacker.side==='player') dmg = Math.round(dmg*0.92);
+  if(gambit==='focused_fire' && attacker.side==='player'){
+    dmg = Math.round(dmg * (defender.hp < defender.maxHp*0.5 ? 1.10 : 0.94));
+  }
   let crit = false;
-  if(Math.random() < 0.12 + (attacker.critBonus||0)){ dmg = Math.round(dmg*1.5); crit = true; }
+  if(forceCrit || Math.random() < 0.12 + (attacker.critBonus||0) + (defender.critVulnerability||0)){ dmg = Math.round(dmg*1.5); crit = true; }
   return { dmg, crit, plated, strikeElem };
 }
 
@@ -4996,6 +5195,8 @@ function chargeGauge(amount){
   const b = state.battle;
   if(activeBlessing()==='volt') amount *= 1.25;
   if(hasPerk('gauge')) amount *= 1.15;
+  if(b.gambit==='overclock') amount *= 1.25;
+  if(b.gambit==='bulwark') amount *= 0.85;
   const totalHp = b.playerUnits.reduce((s,u)=>s+u.maxHp,0);
   const curHp = b.playerUnits.reduce((s,u)=>s+(u.fainted?0:u.hp),0);
   const desperate = totalHp>0 && (curHp/totalHp) < 0.4;
@@ -5015,11 +5216,14 @@ function applyDamage(attacker, defender, isSkill){
     fxMotion(attacker, defender, null, false);
     return;
   }
-  const {dmg, crit, plated, strikeElem} = computeDamage(attacker, defender, isSkill);
+  const forceCrit = !!(attacker.gambitFirstCrit && !attacker.gambitFirstCritUsed);
+  const {dmg, crit, plated, strikeElem} = computeDamage(attacker, defender, isSkill, forceCrit);
+  if(forceCrit) attacker.gambitFirstCritUsed = true;
   let finalDmg = dmg, note = '';
   if(plated) note += ' (counter-plating holds)';
   if(defender.shield){ defender.shield=false; finalDmg=0; note=' — shield absorbs it!'; }
   else if(defender.firstHitReduction && !defender.firstHitUsed){ defender.firstHitUsed=true; finalDmg=Math.round(finalDmg*0.5); note += ' (tide ward halves the blow)'; }
+  const defenderHpBeforeHit = defender.hp;
   defender.hp = Math.max(0, defender.hp-finalDmg);
   if(defender.hp<=0) defender.fainted = true;
   fxMotion(attacker, defender, strikeElem, finalDmg>0);
@@ -5063,6 +5267,17 @@ function applyDamage(attacker, defender, isSkill){
       }
     }
   }
+  /* Cascade Overkill: a killing blow that did more than it needed to splashes
+     the leftover damage into the next living unit in that same row (either
+     side — this isn't a player-only perk). One hop only, no further chaining
+     even if the splash also overkills, and it bypasses the normal to-hit
+     rules entirely (no dodge/miss/crit roll of its own) since it's the same
+     blow's own overflow, not a fresh attack. */
+  if(defender.fainted && finalDmg > defenderHpBeforeHit){
+    const overflow = finalDmg - defenderHpBeforeHit;
+    const splash = cascadeTarget(defender);
+    if(splash) applyCascadeOverflow(attacker, splash, overflow, strikeElem);
+  }
   if(!defender.fainted && finalDmg>0){
     if(attacker.burnOnHit && Math.random()<attacker.burnOnHit) setStatus(defender,'burn',3);
     if(attacker.stunOnHit && Math.random()<attacker.stunOnHit) setStatus(defender,'stun',1);
@@ -5084,6 +5299,63 @@ function applyDamage(attacker, defender, isSkill){
         ally.hp = Math.max(0, ally.hp-backDmg);
         if(ally.hp<=0){ ally.fainted = true; if(ally.side==='enemy') onEnemyFainted(ally); }
         logMsg(`⚡ Short circuit! ${ally.emoji} ${ally.name} also takes ${backDmg} damage.`);
+      }
+    }
+  }
+}
+
+/* ---- Cascade Overkill ----
+   Finds the next living unit in the same row as a just-defeated unit, using
+   the row-mate's position in the battle's own side array (which preserves
+   front-then-back, slot-then-slot build order for both buildPlayerUnits and
+   buildEnemyUnits) — so "next" means "the next slot over," not a random
+   pick. Returns null if the defeated unit was the last of its row still
+   standing, in which case the overflow simply vanishes as it always did. */
+function cascadeTarget(defender){
+  const b = state.battle; if(!b) return null;
+  const side = defender.side==='player' ? b.playerUnits : b.enemyUnits;
+  const idx = side.indexOf(defender);
+  if(idx<0) return null;
+  for(let i=idx+1; i<side.length; i++){
+    const u = side[i];
+    if(u.row===defender.row && !u.fainted) return u;
+  }
+  return null;
+}
+/* The overflow is already-resolved damage from the original hit, so it skips
+   the normal to-hit pipeline entirely (no miss/dodge/plating/crit roll of
+   its own) and never chains further, even if it also overkills its target —
+   a two-for-one, not a domino run down the whole row. */
+function applyCascadeOverflow(attacker, target, overflow, strikeElem){
+  if(!target || target.fainted || overflow<1) return;
+  const dmg = overflow;
+  target.hp = Math.max(0, target.hp - dmg);
+  if(target.hp<=0) target.fainted = true;
+  fx(target.id, '⚡-' + dmg, 'crit');
+  sfx('crit');
+  logMsg(`💥 The blow cascades — ${target.emoji} ${target.name} takes ${dmg} overflow damage${target.fainted?' — defeated!':''}!`);
+  if(attacker.side==='player' && target.side==='enemy'){
+    const b = state.battle;
+    b.elemDamage[strikeElem] = (b.elemDamage[strikeElem]||0) + dmg;
+    b.totalDamage = (b.totalDamage||0) + dmg;
+    b.dmgByUnitId[attacker.id] = (b.dmgByUnitId[attacker.id]||0) + dmg;
+  }
+  if(attacker.side==='player' && target.side==='enemy') chargeGauge(dmg/3);
+  if(target.side==='player') chargeGauge(dmg/5);
+  if(target.side==='player' && target.hp>0){
+    const b = state.battle;
+    const pct = target.hp / target.maxHp;
+    if(b.lowestSurvivorPct===null || pct < b.lowestSurvivorPct){
+      b.lowestSurvivorPct = pct; b.lowestSurvivorId = target.id;
+    }
+  }
+  if(target.fainted && target.side==='enemy'){
+    onEnemyFainted(target);
+    if(attacker.side==='player'){
+      state.battle.lastKillId = attacker.id;
+      if(attacker.speciesId){
+        const kb = state.battle.killsBySpecies || (state.battle.killsBySpecies = {});
+        kb[attacker.speciesId] = (kb[attacker.speciesId]||0) + 1;
       }
     }
   }
@@ -5886,15 +6158,16 @@ function renderUnit(u, activeId, validTargetIds){
   const selectable = validTargetIds && validTargetIds.includes(u.id) && !u.fainted;
   const allyPick = selectable && u.side==='player';
   return `
-  <div class="unit ${u.isBoss?'boss':''} ${u.isGenerator?'gen':''} ${u.isAce?'ace':''} ${u.fainted?'fainted':''} ${u.id===activeId?'active':''} ${selectable?(allyPick?'allytarget':'targetable'):''}"
+  <div class="unit ${u.isBoss?'boss':''} ${u.isGenerator?'gen':''} ${u.isAce?'ace':''} ${u.isVanguard?'vanguard':''} ${u.fainted?'fainted':''} ${u.id===activeId?'active':''} ${selectable?(allyPick?'allytarget':'targetable'):''}"
        data-unit="${u.id}"
        ${selectable?`onclick="${planningOpen()?'planChooseTarget':'playerTarget'}('${u.id}')"`:''}>
     ${u.shielded?`<div class="shield-tag" title="shielded while a pylon stands">🛡 SHIELDED</div>`:''}
     ${u.isAce?`<div class="shield-tag" style="background:var(--gold); color:#241a02;" title="Rustbound Ace — noticeably tougher than its squadmates">⭐ ACE</div>`:''}
+    ${u.isVanguard?`<div class="shield-tag" style="background:var(--danger); color:#2a0410;" title="Vanguard — clear its escort first and it drops a unique trophy when it finally falls">🛡️ VANGUARD</div>`:''}
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
     ${u.trait&&!u.corruption?`<div class="rust-tag" style="color:var(--volt)" title="${traitName(u.trait)}: ${traitDesc(u.trait)}">${TRAITS[u.trait.key].emoji}</div>`:''}
-    <div class="unit-motion"><div class="emoji" style="animation-delay:-${(seedRandom(u.id)(24)/10).toFixed(1)}s">${unitSpriteHtml(u, (u.isBoss||u.isAce)?48:36)}</div></div>
+    <div class="unit-motion"><div class="emoji" style="animation-delay:-${(seedRandom(u.id)(24)/10).toFixed(1)}s">${unitSpriteHtml(u, (u.isBoss||u.isAce||u.isVanguard)?48:36)}</div></div>
     <div class="uname">${u.name}${u.mentorRookie?` <span title="Mentor Bond: paired with a veteran — earning bonus EXP this fight">🌱</span>`:''}${u.mentorVeteran?` <span title="Mentor Bond: mentoring a rookie — fighting sharper for it">🎓</span>`:''}${u.battleBond?` <span title="Battle-Forged Bond: fought and survived enough fights alongside this partner to fight sharper for it">🔗</span>`:''}</div>
     <div class="hpbar-bg"><div class="hpbar-fill ${(!jammed&&pct<30)?'low':''}" style="width:${pct}%; ${jammed?'background:repeating-linear-gradient(90deg,var(--dim) 0 4px,#000 4px 8px);':''}"></div></div>
     <div class="cd-tag">${u.fainted?'DOWN':(u.skillCd>0?'skill:'+u.skillCd:'skill ready')}</div>
