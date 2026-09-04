@@ -50,6 +50,10 @@ const SUITES = [
   { label:'harvest-codex',   harness:'dom-storage-server.js', assert:true, files:['14-harvest-codex-tactical.js'] },
   { label:'legion-identity', harness:'dom-storage-server.js', assert:true, files:['15-legion-identity.js'] },
   { label:'war-journal',     harness:'dom-storage-server.js', assert:true, files:['16-war-journal.js'] },
+  { label:'commander-victory', harness:'dom-storage-server.js', assert:true, files:['17-commander-victory.js'] },
+  { label:'warlord-factions',  harness:'dom-storage-server.js', assert:true, files:['18-warlord-factions.js'] },
+  { label:'guild-council',     harness:'dom-storage-server.js', assert:true, files:['19-guild-council.js'] },
+  { label:'mentor-bonds',      harness:'dom-storage-server.js', assert:true, files:['20-mentor-bonds.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

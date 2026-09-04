@@ -75,9 +75,24 @@ alter table public.guild_members enable row level security;
 create policy "guilds are readable by signed-in players"
   on public.guilds for select to authenticated using (true);
 
+-- A policy on guild_members cannot query guild_members from inside its own
+-- USING clause — Postgres re-runs the policy to evaluate the subquery, which
+-- re-runs the policy, forever ("infinite recursion detected in policy for
+-- relation guild_members"). This helper does the lookup as security definer,
+-- which sidesteps RLS for just this one internal read and breaks the loop.
+create or replace function public.my_guild_id()
+returns uuid
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select guild_id from public.guild_members where user_id = auth.uid();
+$$;
+
 create policy "members of a guild can see each other"
   on public.guild_members for select to authenticated
-  using (guild_id in (select guild_id from public.guild_members where user_id = auth.uid()));
+  using (guild_id = public.my_guild_id());
 
 -- ---------- raid ----------
 create table public.raid_bosses (
@@ -131,6 +146,17 @@ alter table public.ladder enable row level security;
 create policy "the ladder is public to signed-in players"
   on public.ladder for select to authenticated using (true);
 -- Writes go through publish_formation / report_duel only.
+
+-- ---------- grants ----------
+-- RLS only decides which ROWS a role can see; a role still needs the plain
+-- SQL privilege to touch the table at all, or every query 42501s with
+-- "permission denied" before RLS is ever consulted. Every SELECT the game
+-- issues from the client goes through `authenticated`; every write goes
+-- through the security-definer functions in step 2, so SELECT is all this
+-- role needs here.
+grant usage on schema public to authenticated;
+grant select on public.guilds, public.guild_members, public.raid_bosses,
+  public.raid_damage, public.ladder to authenticated;
 ```
 
 ### Step 2 of 2 — the functions ← **don't stop after step 1**
@@ -496,6 +522,65 @@ Perks apply to every member, and are read from the server-held level.
 
 ---
 
+## Step 5 — the guild council
+
+**Optional, and independent of step 4.** Adds a lightweight weekly vote: once a
+week, every member picks Offensive Doctrine (+8% ATK) or Defensive Doctrine (+8%
+DEF), and whichever is leading applies to the whole guild's battles until the vote
+resets the following Monday. Safe to run more than once.
+
+```sql
+create table public.guild_council_votes (
+  guild_id  uuid not null references public.guilds(id) on delete cascade,
+  user_id   uuid not null references auth.users(id) on delete cascade,
+  week      text not null,
+  option    text not null check (option in ('atk','def')),
+  voted_at  timestamptz not null default now(),
+  primary key (guild_id, user_id, week)
+);
+
+alter table public.guild_council_votes enable row level security;
+
+-- Reuses the my_guild_id() helper from step 1, so this policy cannot hit the
+-- same "infinite recursion" bug that guild_members did.
+create policy "guild members see their council votes"
+  on public.guild_council_votes for select to authenticated
+  using (guild_id = public.my_guild_id());
+
+-- Same two-layer reminder as step 1: RLS alone is not enough, this role also
+-- needs the plain SELECT privilege or every read 42501s before RLS runs.
+grant select on public.guild_council_votes to authenticated;
+
+-- One vote per member per week; voting again this week changes it rather
+-- than adding a second row.
+create or replace function public.cast_council_vote(p_week text, p_option text)
+returns void language plpgsql security definer set search_path = public as $$
+declare g_id uuid;
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  if p_option not in ('atk','def') then raise exception 'not a valid doctrine'; end if;
+  select guild_id into g_id from guild_members where user_id = auth.uid();
+  if g_id is null then raise exception 'you are not in a guild'; end if;
+  insert into guild_council_votes (guild_id, user_id, week, option)
+    values (g_id, auth.uid(), left(coalesce(p_week,''), 32), p_option)
+    on conflict (guild_id, user_id, week)
+    do update set option = excluded.option, voted_at = now();
+end $$;
+```
+
+Then reload the schema cache the same way as before:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+The game reads every member's vote for the current week and tallies them
+client-side (same trust model as the raid damage board — see the table at the
+top of this document), so there is nothing further to run: the tally, the
+leading option, and the stat buff are all computed in the game itself.
+
+---
+
 ## How each feature behaves
 
 **Daily orders** — three objectives drawn from a date seed, so every player on a
@@ -514,6 +599,13 @@ shows who contributed what.
 **Ladder** — publish your formation and it becomes a defence other players fight,
 run by the same AI the Rustbound use. Duels are simulated on the attacker's device
 against the defender's saved legion. Win or lose, rating moves ±16.
+
+**Guild council** — once a week, each member casts one vote for Offensive or
+Defensive Doctrine. Whichever option has more votes applies an 8% ATK or DEF buff
+to every member's battles until the vote resets the following Monday (UTC); a tie
+favours Offensive. Voting again the same week changes your vote rather than adding
+a second one, and the buff is only ever a read-and-tally of everyone's votes — the
+same trust model as the raid damage board.
 
 ## Cost
 

@@ -24,7 +24,7 @@ global.atob = (b)=>Buffer.from(b,'base64').toString('binary');
 const SRV = {
   users: {},              // email -> {id,password}
   rows: {},               // userId -> {slot: {data, updated_at}}
-  guilds: {}, gmembers: {}, bosses: {}, rdamage: {}, ladder: {},
+  guilds: {}, gmembers: {}, bosses: {}, rdamage: {}, ladder: {}, cvotes: {},
   online: true,
   requireConfirm: false,
   tokens: {},             // access -> {userId}
@@ -34,10 +34,11 @@ const SRV = {
 };
 function srvReset(){
   SRV.users={}; SRV.rows={};
-  SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={};
+  SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={}; SRV.cvotes={};
   SRV.online=true; SRV.requireConfirm=false; SRV.tokens={}; SRV.refreshes={};
   SRV.calls=[]; SRV.nextId=1; SRV.tableMissing=false; SRV.leakRows=false; SRV.rejectKey=false;
   SRV.preGuildHall=false;   // tables/functions installed, but step 4 (guild-hall upgrade) never run
+  SRV.noCouncilTable=false; // steps 1/2/4 done, but step 5 (guild council) never run
 }
 function lvlFor(xp){ return xp>=60000?6:xp>=30000?5:xp>=14000?4:xp>=6000?3:xp>=2000?2:1; }
 function mkSession(userId,email){
@@ -139,6 +140,16 @@ global.fetch = function(url, opts){
       return res(200,g.level);
     }
 
+    if(fn==='cast_council_vote'){
+      if(SRV.noCouncilTable) return res(404,{message:"Could not find the function public.cast_council_vote(p_option, p_week) in the schema cache"});
+      const g=myGuild(); if(!g) return res(400,{message:'you are not in a guild'});
+      const opt=body.p_option;
+      if(opt!=='atk' && opt!=='def') return res(400,{message:'not a valid doctrine'});
+      const week=String(body.p_week||'').slice(0,32);
+      const k=g+'|'+uid+'|'+week;
+      SRV.cvotes[k]={guild_id:g,user_id:uid,week,option:opt,voted_at:new Date().toISOString()};
+      return res(200,null);
+    }
     if(fn==='start_raid'){
       const g=myGuild(); if(!g) return res(400,{message:'you are not in a guild'});
       if(Object.values(SRV.bosses).some(b=>b.guild_id===g && !b.defeated_at))
@@ -230,6 +241,22 @@ global.fetch = function(url, opts){
     if(!bm) return res(200,[]);
     return res(200, Object.values(SRV.rdamage).filter(d=>d.boss_id===bm[1])
       .sort((a,c)=>c.damage-a.damage).map(d=>({display_name:d.display_name,damage:d.damage})));
+  }
+  if(path.indexOf('/rest/v1/guild_council_votes')===0){
+    if(SRV.noCouncilTable) return res(404,{message:"Could not find the table 'public.guild_council_votes' in the schema cache"});
+    const gm=path.match(/guild_id=eq\.([^&]+)/);
+    if(!gm){
+      // Bare self-test probe (no guild filter) — just checks the table exists.
+      return res(200, Object.values(SRV.cvotes).slice(0,1).map(v=>({option:v.option})));
+    }
+    if(!who) return res(401,{message:'not signed in'});
+    const mine=SRV.gmembers[who.userId];
+    if(!mine || mine.guild_id!==gm[1]) return res(200,[]);   // RLS: members only
+    const wm=path.match(/week=eq\.([^&]+)/);
+    const week = wm ? decodeURIComponent(wm[1]) : null;
+    return res(200, Object.values(SRV.cvotes)
+      .filter(v=>v.guild_id===gm[1] && (week===null || v.week===week))
+      .map(v=>({user_id:v.user_id,option:v.option,voted_at:v.voted_at})));
   }
   if(path.indexOf('/rest/v1/ladder')===0){
     if(!who) return res(401,{message:'not signed in'});

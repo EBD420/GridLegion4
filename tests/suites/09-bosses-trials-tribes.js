@@ -12,7 +12,9 @@ function setupFight(mons, stage){
 console.log('\n[35] commander fights');
 startGame();
 ok('boss stages are declared', !!bossForStage(5) && !!bossForStage(9) && !!bossForStage(10));
-ok('ordinary stages have none', !bossForStage(1) && !bossForStage(4) && !bossForStage(7));
+// Stage 7 now always fields Warlord Ashclaw (see 18-warlord-factions.js) — it is
+// a boss stage too, just not one of the scripted commanders in BOSSES.
+ok('ordinary stages have none', !bossForStage(1) && !bossForStage(4) && !bossForStage(6));
 ok('the Deep has a boss every 10 depths', !!bossForStage(20) && !!bossForStage(30) && !bossForStage(25));
 B=setupFight([newMonster('emberling',12), newMonster('aqualing',12)], 10);
 const boss=B.enemyUnits.find(u=>u.isBoss), gens=B.enemyUnits.filter(u=>u.isGenerator);

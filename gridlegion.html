@@ -517,9 +517,38 @@ const DEEP_BOSS = {
   gens:3, genName:'Feeder Arm', genEmoji:'🔶', genElement:'earth',
   intro:'A Foundry Core hauls itself up from the assembly floor.',
 };
+/* ---- Warlord sub-factions: named enemy leaders beyond the standard Rustbound,
+   with their own look and skill kit. They use the exact same boss-fight rig
+   (buildBossUnits, the shield mechanic, War Journal, Victory Portrait) as the
+   campaign bosses — bossForStage() just hands one back on stages that don't
+   already have a scripted boss, so nothing downstream needed to change. ---- */
+const WARLORDS = {
+  ashclaw:   { name:'Warlord Ashclaw',   emoji:'🐉', element:'fire',  skill:'Cinder Warpath',
+    mult:{ hp:3.0, atk:1.4, def:1.2, spd:1.1 }, gens:1, genName:'Kindling Drone', genEmoji:'🔥', genElement:'fire',
+    intro:'Warlord Ashclaw stalks in on legs of scavenged flame-plate.', isWarlord:true, faction:'The Ashclaw Warband' },
+  tidewrack: { name:'Warlord Tidewrack', emoji:'🐙', element:'water', skill:'Undertow Protocol',
+    mult:{ hp:3.2, atk:1.2, def:1.4, spd:1.0 }, gens:2, genName:'Ballast Drone', genEmoji:'💧', genElement:'water',
+    intro:'Warlord Tidewrack surfaces, trailing a wake of ballast drones.', isWarlord:true, faction:'The Tidewrack Cartel' },
+  galevane:  { name:'Warlord Galevane',  emoji:'🦂', element:'wind',  skill:'Shear Cascade',
+    mult:{ hp:2.8, atk:1.5, def:1.1, spd:1.35 }, gens:1, genName:'Vane Drone', genEmoji:'🌪', genElement:'wind',
+    intro:'Warlord Galevane arrives on a screaming rotor-frame.', isWarlord:true, faction:'The Galevane Sept' },
+};
+const WARLORD_ORDER = ['ashclaw','tidewrack','galevane'];
+/* One guaranteed campaign appearance at stage 7 (open between the stage-5 and
+   stage-9 bosses); in the Deep they cycle in every 10th depth, offset from
+   both the elite-wave cadence (every 5th) and the Foundry Core (every 10th)
+   so a warlord fight never doubles up with either. */
+function warlordForStage(stage){
+  if(stage===7) return WARLORDS.ashclaw;
+  if(isDeep(stage)){
+    const d = deepDepth(stage);
+    if(d>=7 && d%10===7) return WARLORDS[WARLORD_ORDER[Math.floor(d/10) % WARLORD_ORDER.length]];
+  }
+  return null;
+}
 function bossForStage(stage){
-  if(!isDeep(stage)) return BOSSES[stage] || null;
-  return (deepDepth(stage) % 10 === 0) ? DEEP_BOSS : null;
+  const scripted = isDeep(stage) ? (deepDepth(stage)%10===0 ? DEEP_BOSS : null) : (BOSSES[stage] || null);
+  return scripted || warlordForStage(stage);
 }
 const BOSS_REPAIR_EVERY = 4;   // commander turns between pylon reboots
 
@@ -848,9 +877,23 @@ function cloudSelfTest(){
                   } else {
                     add(true, 'Guild-hall columns are present.');
                   }
-                  return { lines: out, fatal:false };
+                  return null;
                 })
-                .catch(()=>({ lines: out, fatal:false }));
+                .catch(()=>null)
+                // 4. the guild council table (step 5) is the most recent migration.
+                .then(()=>{
+                  return cloudFetch('/rest/v1/guild_council_votes?select=option&limit=1', { method:'GET' }, true)
+                    .then(r4=>{
+                      const m4 = (r4.body && (r4.body.message||r4.body.hint)) || '';
+                      if(r4.status===404 || /could not find the table|does not exist/i.test(String(m4))){
+                        add(false, 'The guild council table is missing — run step 5 of SETUP-MULTIPLAYER.md to enable the weekly guild vote.');
+                      } else {
+                        add(true, 'Guild council table is present.');
+                      }
+                      return { lines: out, fatal:false };
+                    })
+                    .catch(()=>({ lines: out, fatal:false }));
+                });
             });
         })
         .catch(() => { add(false, 'Could not reach the database endpoint.'); return { lines: out, fatal: true }; });
@@ -863,7 +906,7 @@ function cloudSelfTest(){
    game never depends on any of it. See SETUP-MULTIPLAYER.md.
    ============================================================ */
 const social = { guild:null, members:[], raid:null, board:[], ladder:[], rank:null, opponent:null,
-                 status:'', guildError:'', busy:false, lastDuel:null };
+                 council:[], councilError:'', status:'', guildError:'', busy:false, lastDuel:null };
 
 /* ---- guild progression ----
    Thresholds are cumulative XP. Perks are read from the server-held level and
@@ -898,18 +941,20 @@ function myMembership(){
 }
 function isGuildLeader(){ const m = myMembership(); return !!(m && m.role==='leader'); }
 
-function rpcErrorText(r){
+function rpcErrorText(r, missingMsg){
   const msg = (r.body && (r.body.message || r.body.hint)) || ('status ' + r.status);
   // PostgREST says this when a function is absent OR when its cache is stale.
   if(r.status===404 || /could not find the function|schema cache/i.test(String(msg))){
-    return 'The multiplayer functions are not installed on your project yet — run the FUNCTIONS block (step 2) from SETUP-MULTIPLAYER.md, then reload the schema.';
+    return missingMsg || 'The multiplayer functions are not installed on your project yet — run the FUNCTIONS block (step 2) from SETUP-MULTIPLAYER.md, then reload the schema.';
   }
   if(/permission denied|not signed in/i.test(String(msg))) return 'Your session was not accepted — try signing out and back in.';
   return msg;
 }
-function rpc(fn, args){
+/* missingMsg lets a caller override the "not installed" guidance for a function that
+   belongs to a later migration step (e.g. cast_council_vote, added in step 5). */
+function rpc(fn, args, missingMsg){
   return authed('/rest/v1/rpc/' + fn, { method:'POST', body: JSON.stringify(args||{}) })
-    .then(r => r.ok ? { ok:true, body:r.body } : { ok:false, error: rpcErrorText(r), status:r.status })
+    .then(r => r.ok ? { ok:true, body:r.body } : { ok:false, error: rpcErrorText(r, missingMsg), status:r.status })
     .catch(() => ({ ok:false, error:'Could not reach the server.' }));
 }
 function restGet(path){
@@ -920,18 +965,20 @@ function restGet(path){
 /* Like restGet, but tells a genuine query failure (missing column/table — usually an
    un-run migration) apart from a legitimate empty result, and turns the former into a
    message the player can act on instead of a silent blank screen. */
-function restGetErrorText(r){
+function restGetErrorText(r, missingMsg){
   const msg = (r.body && (r.body.message || r.body.hint)) || ('status ' + r.status);
   if(/column .* does not exist|could not find/i.test(String(msg))){
-    return 'Your project is missing the guild-hall upgrade — run Step 4 of SETUP-MULTIPLAYER.md (adds guild levels and member profiles), then reload the schema.';
+    return missingMsg || 'Your project is missing the guild-hall upgrade — run Step 4 of SETUP-MULTIPLAYER.md (adds guild levels and member profiles), then reload the schema.';
   }
   return String(msg);
 }
-function restGetDiag(path){
+/* missingMsg lets a caller override the "not run yet" guidance for its own migration
+   step (e.g. the guild council table added in step 5) instead of the guild-hall default. */
+function restGetDiag(path, missingMsg){
   return authed('/rest/v1/' + path, { method:'GET' })
     .then(r => (r.ok && Array.isArray(r.body))
       ? { ok:true, rows:r.body }
-      : { ok:false, rows:null, error: restGetErrorText(r) })
+      : { ok:false, rows:null, error: restGetErrorText(r, missingMsg) })
     .catch(() => ({ ok:false, rows:null, error:'Could not reach the server.' }));
 }
 
@@ -981,7 +1028,63 @@ function guildKick(userId){
   return rpc('kick_member', { p_user: userId }).then(r=>r.ok?guildFetch().then(()=>({ok:true})):r);
 }
 function guildLeave(){
-  return rpc('leave_guild', {}).then(r=>{ social.guild=null; social.members=[]; social.raid=null; social.board=[]; return r; });
+  return rpc('leave_guild', {}).then(r=>{ social.guild=null; social.members=[]; social.raid=null; social.board=[]; social.council=[]; social.councilError=''; return r; });
+}
+
+/* ---- guild council ----
+   Once a week the guild votes on one shared doctrine. Lightweight and
+   asynchronous: no real-time anything, just a row per member per week that
+   everyone reads and tallies client-side, same trust model as the raid
+   damage board. The leading option (by vote count; ties favour Offensive)
+   applies a small stat buff to every battle for the rest of that week. */
+const COUNCIL_OPTIONS = {
+  atk: { key:'atk', name:'Offensive Doctrine', emoji:'⚔', desc:'+8% ATK for the whole guild this week' },
+  def: { key:'def', name:'Defensive Doctrine', emoji:'🛡', desc:'+8% DEF for the whole guild this week' },
+};
+/* A stable key that resets every Monday 00:00 UTC. Not a calendar ISO week
+   number — just needs to be identical for every player in the same week,
+   which a simple "weeks since a fixed Monday" count gives for free. */
+function weekKey(){
+  const now = Date.now();
+  const dayMs = 86400000;
+  const todayUtcMidnight = Math.floor(now / dayMs) * dayMs;
+  const dow = new Date(todayUtcMidnight).getUTCDay();          // 0=Sun..6=Sat
+  const sinceMonday = (dow + 6) % 7;                            // Mon=0..Sun=6
+  const mondayThisWeek = todayUtcMidnight - sinceMonday * dayMs;
+  const epochMonday = Date.UTC(2020, 0, 6);                     // a known Monday
+  return 'W' + Math.floor((mondayThisWeek - epochMonday) / (7 * dayMs));
+}
+function councilFetch(){
+  if(!signedIn() || !social.guild) return Promise.resolve(null);
+  return restGetDiag('guild_council_votes?select=user_id,option,voted_at&guild_id=eq.'+social.guild.id+'&week=eq.'+weekKey(),
+      'Your project is missing the guild council upgrade — run Step 5 of SETUP-MULTIPLAYER.md (adds the weekly guild vote), then reload the schema.')
+    .then(res=>{
+      if(!res.ok){ social.council=[]; social.councilError=res.error; return null; }
+      social.councilError='';
+      social.council = res.rows;
+      return social.council;
+    });
+}
+function councilVote(option){
+  if(!COUNCIL_OPTIONS[option]) return Promise.resolve({ok:false, error:'Not a valid doctrine.'});
+  return rpc('cast_council_vote', { p_week: weekKey(), p_option: option },
+      'The guild council vote is not installed on your project yet — run step 5 of SETUP-MULTIPLAYER.md, then reload the schema.')
+    .then(r=>{ if(r.ok) return councilFetch().then(()=>({ok:true})); return r; });
+}
+function councilTally(){
+  const t = { atk:0, def:0 };
+  (social.council||[]).forEach(v=>{ if(t[v.option]!==undefined) t[v.option]++; });
+  return t;
+}
+function councilLeadingOption(){
+  const t = councilTally();
+  if(t.atk===0 && t.def===0) return null;
+  return t.def>t.atk ? 'def' : 'atk';   // tie favours Offensive
+}
+function myCouncilVote(){
+  if(!cloud.session) return null;
+  const row = (social.council||[]).find(v=>v.user_id===cloud.session.user.id);
+  return row ? row.option : null;
 }
 
 /* ---- raid ---- */
@@ -1130,6 +1233,22 @@ function reviveMonster(m){
 /* Keeps the War Journal readable across app updates: an entry from a build
    that no longer exists still has a stage number and prose, so it's kept
    as-is rather than dropped — only malformed entries are discarded. */
+function revivePortrait(p){
+  if(!p || typeof p!=='object') return null;
+  if(typeof p.element!=='string' || !Object.keys(ELEM_BEATS).includes(p.element)) return null;
+  if(typeof p.label!=='string' || !p.label) return null;
+  return {
+    element: p.element,
+    mvpName: typeof p.mvpName==='string' ? p.mvpName.slice(0,40) : null,
+    mvpEmoji: typeof p.mvpEmoji==='string' ? p.mvpEmoji.slice(0,8) : '⚔',
+    label: p.label.slice(0,40),
+    bossName: typeof p.bossName==='string' ? p.bossName.slice(0,40) : null,
+    bossEmoji: typeof p.bossEmoji==='string' ? p.bossEmoji.slice(0,8) : null,
+    finale: p.finale === true,
+    warlord: p.warlord === true,
+    faction: typeof p.faction==='string' ? p.faction.slice(0,40) : null,
+  };
+}
 function reviveJournal(list){
   if(!Array.isArray(list)) return [];
   return list.filter(e => e && typeof e==='object'
@@ -1143,6 +1262,7 @@ function reviveJournal(list){
       boss: typeof e.boss==='string' ? e.boss : null,
       text: e.text.slice(0, 600),
       at: (typeof e.at==='number' && isFinite(e.at)) ? e.at : Date.now(),
+      portrait: revivePortrait(e.portrait),
     }))
     .slice(0, JOURNAL_CAP);
 }
@@ -1401,6 +1521,10 @@ function initGame(){
   const starters = ['emberling','aqualing','terrafang'].map(id=>newMonster(id,1,1));
   state.roster = starters;
   state.parts = [];
+  if(commanderHasPerk('salvage_start')){
+    const keys = Object.keys(PARTS);
+    state.parts.push({ uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] });
+  }
   state.emblem = [];
   state.journal = [];
   state.intel = { history: [], wins: 0 };
@@ -1718,7 +1842,7 @@ function codexTotals(){
     species: Object.keys(SPECIES).length,
     enemies: ENEMY_IDS.length,
     hybrids: Object.keys(HYBRID_SPECIES).length,
-    bosses: Object.keys(BOSSES).length + 1,
+    bosses: Object.keys(BOSSES).length + 1 + Object.keys(WARLORDS).length,
     terrains: Object.keys(TERRAINS).length,
     parts: Object.keys(PARTS).length,
     traits: TRAIT_IDS.length,
@@ -1834,7 +1958,7 @@ function renderCodex(){
     </div>`;
   }).join('');
 
-  const bossNames = Object.keys(BOSSES).map(k=>BOSSES[k]).concat([DEEP_BOSS]);
+  const bossNames = Object.keys(BOSSES).map(k=>BOSSES[k]).concat([DEEP_BOSS]).concat(Object.keys(WARLORDS).map(k=>WARLORDS[k]));
   const bossCards = bossNames.map(bd=>{
     const known = c.bosses[bd.name];
     return `<div class="mcard" style="width:130px; cursor:default; ${known?'':'opacity:0.3'}">
@@ -1902,6 +2026,7 @@ function renderJournal(){
         <div class="dim" style="font-size:13px;">${when.toLocaleDateString()}</div>
       </div>
       <div class="storytext">${escapeHtml(e.text)}</div>
+      ${e.portrait ? renderVictoryPortrait(e.portrait) : ''}
     </div>`;
   }).join('');
   return `
@@ -1929,6 +2054,7 @@ function render(){
   else if(state.screen==='ladder') app.innerHTML = renderLadder();
   else if(state.screen==='legionid') app.innerHTML = renderLegionId();
   else if(state.screen==='journal') app.innerHTML = renderJournal();
+  else if(state.screen==='commander') app.innerHTML = renderCommanderRank();
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
   else if(state.screen==='salvage') app.innerHTML = renderSalvage();
@@ -2214,6 +2340,7 @@ function renderHub(){
       <button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>
       ${clearedStages().length?`<button class="btn" onclick="goTrials()">☠ Trials (${clearedStages().length})</button>`:''}
       <button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>
+      <button class="btn" onclick="goCommanderRank()">🎖 Commander Rank ${commander.level}</button>
     </div>
     <div class="row" style="margin-top:10px; align-items:center;">
       <button class="btn small" onclick="goGuild()">🛡 Guild</button>
@@ -2373,6 +2500,7 @@ function goGuild(){
   guildFetch()
     .then(g=>{ if(g) return guildSync().then(()=>guildFetch()); return null; })
     .then(g=>{ if(g) return raidFetch(); return null; })
+    .then(()=>{ if(social.guild) return councilFetch(); return null; })
     .then(()=>render());
 }
 function goLadder(){
@@ -2446,6 +2574,26 @@ function renderGuild(){
     </div>`;
   }).join('');
 
+  const councilErrMsg = social.councilError ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.councilError)}</p>` : '';
+  const tally = councilTally();
+  const totalVotes = tally.atk + tally.def;
+  const leading = councilLeadingOption();
+  const myVote = myCouncilVote();
+  const councilRows = Object.keys(COUNCIL_OPTIONS).map(k=>{
+    const o = COUNCIL_OPTIONS[k];
+    const pct = totalVotes ? Math.round((tally[k]/totalVotes)*100) : 0;
+    const mine = myVote===k;
+    const lead = leading===k && totalVotes>0;
+    return `<div style="border:1px solid ${lead?'var(--gold)':'var(--border)'}; border-radius:8px; padding:8px; margin-top:6px;">
+      <div class="row" style="justify-content:space-between; align-items:baseline;">
+        <div>${o.emoji} <b>${escapeHtml(o.name)}</b>${lead?' <span style="color:var(--gold); font-size:13px;">— leading</span>':''}</div>
+        <div class="dim">${tally[k]} vote${tally[k]===1?'':'s'}${totalVotes?' ('+pct+'%)':''}</div>
+      </div>
+      <div class="dim" style="font-size:14px;">${escapeHtml(o.desc)}</div>
+      <button class="btn small ${mine?'primary':''}" style="margin-top:6px;" ${social.busy?'disabled':''} onclick="doCouncilVote('${k}')">${mine?'✔ Your vote':'Vote'}</button>
+    </div>`;
+  }).join('');
+
   return `
   <div class="panel">
     <h2 class="section">${escapeHtml(social.guild.name)} <span class="dim">[${escapeHtml(social.guild.tag)}]</span></h2>
@@ -2470,6 +2618,13 @@ function renderGuild(){
   <div class="panel">
     <h2 class="section">MEMBERS</h2>
     <div class="row">${cards}</div>
+  </div>
+  <div class="panel">
+    <h2 class="section">GUILD COUNCIL</h2>
+    ${councilErrMsg}
+    <p class="dim">Once a week the guild votes on a shared doctrine. Whichever option is leading applies to every member's battles until the vote resets Monday.</p>
+    ${councilRows}
+    ${totalVotes===0 && !councilErrMsg ? '<p class="dim" style="margin-top:8px;">No votes yet this week — be the first.</p>' : ''}
   </div>
   <div class="panel">
     <h2 class="section">RAID BOSS</h2>
@@ -2505,7 +2660,11 @@ function timeAgo(iso){
 }
 function doGuildRefresh(){
   social.busy=true; render();
-  guildSync().then(()=>guildFetch()).then(()=>raidFetch()).then(()=>{ social.busy=false; render(); });
+  guildSync().then(()=>guildFetch()).then(()=>raidFetch()).then(()=>councilFetch()).then(()=>{ social.busy=false; render(); });
+}
+function doCouncilVote(option){
+  social.busy=true; render();
+  councilVote(option).then(r=>{ social.busy=false; social.status = r.ok?'Vote cast.':('Could not vote: '+r.error); render(); });
 }
 function doKick(userId){
   if(social.confirmKick!==userId){ social.confirmKick=userId; render(); return; }
@@ -2687,7 +2846,7 @@ function renderTribes(){
 }
 function recruitChampion(e){
   if(!championUnlocked(e) || state.recruited[e]) return;
-  if(state.roster.length>=18) return;
+  if(state.roster.length>=rosterCap()) return;
   state.recruited[e] = true;
   const m = newMonster(CHAMPIONS[e].id, 1, 1);
   state.roster.push(m);
@@ -3265,8 +3424,31 @@ function applySynergyRefresh(){
   b.synLabels = labels;
 }
 
+/* ---- mentor bonds ----
+   Pair the highest- and lowest-level deployed units, working inward, and any
+   pair that clears the level gap becomes a bond: the rookie earns bonus EXP
+   from the fight, the veteran gets a small permanent-for-the-battle ATK edge
+   from having to fight carefully around a partner who can't yet. A unit is in
+   at most one bond. Called from buildPlayerUnits before refreshSynergies runs,
+   so the veteran's buff feeds the row-synergy math like any other base stat. */
+const MENTOR_LEVEL_GAP = 8;          // minimum level gap to form a bond
+const MENTOR_ROOKIE_EXP_BONUS = 0.5; // +50% EXP for the rookie half of a bond
+const MENTOR_VETERAN_BUFF = 0.05;    // +5% ATK for the veteran half of a bond
+function applyMentorBonds(units){
+  const byLevel = units.slice().sort((a,b)=>a.level-b.level);
+  let lo = 0, hi = byLevel.length-1;
+  while(lo < hi){
+    const rookie = byLevel[lo], veteran = byLevel[hi];
+    if(veteran.level - rookie.level < MENTOR_LEVEL_GAP) break;   // sorted: no remaining pair can clear the gap either
+    rookie.mentorRookie = true; rookie.mentorPartnerId = veteran.id;
+    veteran.mentorVeteran = true; veteran.mentorPartnerId = rookie.id;
+    veteran.bAtk = Math.round(veteran.bAtk * (1 + MENTOR_VETERAN_BUFF));
+    lo++; hi--;
+  }
+}
 function buildPlayerUnits(terrain){
   const units = [];
+  const councilOpt = councilLeadingOption();
   ['front','back'].forEach(row=>{
     state.formation[row].forEach(u=>{
       if(!u) return;
@@ -3274,7 +3456,7 @@ function buildPlayerUnits(terrain){
       const st = computeStats(m);
       const tier = corrTier(st.corruption);
       const unit = Object.assign(baseUnitDefaults(), {
-        id:'p_'+m.uid, side:'player', row, monsterUid:m.uid,
+        id:'p_'+m.uid, side:'player', row, monsterUid:m.uid, level:m.level,
         name:st.name, emoji:st.emoji, element:st.element, elements:st.elements.slice(),
         attackElements:st.innate.slice(), hybrid:st.hybrid, skillName:st.skill,
         bHp:st.hp, bAtk:st.atk, bDef:st.def, bSpd:st.spd,
@@ -3284,6 +3466,8 @@ function buildPlayerUnits(terrain){
         trait: st.trait,
       });
       if(hasPerk('might')){ unit.bAtk = Math.round(unit.bAtk*1.06); unit.bDef = Math.round(unit.bDef*1.06); }
+      if(councilOpt==='atk') unit.bAtk = Math.round(unit.bAtk*1.08);
+      if(councilOpt==='def') unit.bDef = Math.round(unit.bDef*1.08);
       const bless = activeBlessing();
       if(bless==='fire')   unit.bAtk = Math.round(unit.bAtk*1.10);
       if(bless==='earth')  unit.bDef = Math.round(unit.bDef*1.12);
@@ -3314,6 +3498,7 @@ function buildPlayerUnits(terrain){
     });
   });
   if(hasMod('vanguard')) units.forEach(u=>{ u.row='front'; });
+  applyMentorBonds(units);
   refreshSynergies(units, true);
   return units;
 }
@@ -3509,6 +3694,10 @@ function beginBattle(){
   if(tutorialActive()){ state.battle.gauge = 30; logMsg('Training deployment: a scouting pair, lightly armed.'); }
   logMsg(bossDef ? `${bossDef.intro} (${terrain.name})`
                  : `${isEliteStage(state.stage)?'An ELITE wave':'Wave '+state.stage} approaches under ${terrain.name}!`);
+  playerUnits.filter(u=>u.mentorVeteran).forEach(vet=>{
+    const rookie = playerUnits.find(x=>x.id===vet.mentorPartnerId);
+    if(rookie) logMsg(`🎓 ${vet.emoji} ${vet.name} mentors ${rookie.emoji} ${rookie.name} — bonus EXP for the rookie, a sharper edge for the veteran.`);
+  });
   if(bossDef) logMsg(`🛡 ${bossDef.name} is shielded while any ${bossDef.genName} stands.`);
   if(!adapted && usePlating && platingElem){
     logMsg(`▣ Hardened Steel: every Rustbound unit is plated against ${platingElem} (−${Math.round(platingPct()*100)}%).`);
@@ -4163,7 +4352,8 @@ function awardExp(units, amount){
     const m = findMonster(u.monsterUid);
     if(!m) return;
     const before = m.level;
-    m.exp += amount;
+    const gained = u.mentorRookie ? Math.round(amount * (1 + MENTOR_ROOKIE_EXP_BONUS)) : amount;
+    m.exp += gained;
     let need = m.level*10;
     while(m.exp>=need){ m.exp-=need; m.level++; need=m.level*10; }
     if(m.level>before) levelled.push(computeStats(m).name+' Lv.'+m.level);
@@ -4330,7 +4520,7 @@ function endBattle(result){
   }
 
   if(result==='win'){
-    const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1));
+    const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1) * (commanderHasPerk('exp_all') ? 1.05 : 1));
     const levelled = awardExp(b.playerUnits, expGain);
 
     // --- Rustbound intel: they study what actually hurt them ---
@@ -4360,7 +4550,7 @@ function endBattle(result){
     const pulls = (isEliteStage(state.stage) || isBossWin) ? 2 : 1;
     for(let d=0; d<pulls; d++){
       if(state.parts.length>=14) break;
-      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= (hasPerk('salvage')?0.85:0.7)) break;
+      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0))) break;
       const keys = b.enemyUnits.map(u=>u.speciesKey).filter(Boolean);
       if(!keys.length) break;
       const drop = { uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] };
@@ -4371,7 +4561,7 @@ function endBattle(result){
 
     let captured = null;
     const recruitChance = (isEliteStage(state.stage) || isBossWin) ? 1 : (isDeep(state.stage) ? 0.6 : 0.45);
-    if(Math.random()<recruitChance && state.roster.length<18){
+    if(Math.random()<recruitChance && state.roster.length<rosterCap()){
       // Recruits skew toward tribes already in your legion, so duplicates accumulate
       // and the evolution ladder (pair -> Prime, three Primes -> Ascended) can actually be climbed.
       const owned = state.roster.map(m=>m.speciesId).filter(id=>SPECIES[id] && !SPECIES[id].champion);
@@ -4393,13 +4583,138 @@ function endBattle(result){
     const levelled = awardExp(b.playerUnits, expGain);
     state.lastResult = { win:false, expGain, levelled, dailyDone };
   }
+  const portrait = victoryPortrait(result);
   journalAdd(battleJournalEntry(result));
+  if(portrait && state.journal[0]) state.journal[0].portrait = portrait;
+  if(state.lastResult) state.lastResult.portrait = portrait;
+  const cmdLevelled = commanderAddXp(result==='win' ? (20 + state.stage*2) : (5 + Math.floor(state.stage/2)));
+  if(cmdLevelled && state.lastResult) state.lastResult.commanderLevel = cmdLevelled;
   autosave();
   state.screen = 'result';
   sfx(result==='win' ? 'victory' : 'defeat');
   if(result==='win' && state.lastResult && state.lastResult.levelled && state.lastResult.levelled.length) setTimeout(()=>sfx('levelup'), 700);
   musicStop();
   render();
+}
+
+/* ================= COMMANDER RANK =================
+   A meta-progression track that lives OUTSIDE any save slot, in its own
+   localStorage key — initGame() never touches it, so restarting a legion,
+   prestiging, or wiping a slot never resets it. This is the player's own
+   history across every run on this device, not any one legion's.
+   ===================================================== */
+const COMMANDER_KEY = 'gridlegion.v1.commander';
+const COMMANDER_XP = [0, 500, 1500, 3500, 7000, 13000, 22000, 35000, 55000, 85000];   // index = level-1
+const MAX_COMMANDER_LEVEL = COMMANDER_XP.length;
+const COMMANDER_PERKS = {
+  2:  { key:'salvage_start', name:"Scavenger's Eye",  desc:'Every new legion starts with one salvage part already in hand' },
+  4:  { key:'roster_slot',   name:'Extended Muster',   desc:'+1 roster slot cap' },
+  6:  { key:'exp_all',       name:'Veteran Cadre',     desc:'+5% EXP from every victory, on any legion' },
+  8:  { key:'roster_slot2',  name:'Standing Reserve',  desc:'+1 more roster slot cap' },
+  10: { key:'salvage_pct',   name:'Foundry Contacts',  desc:'+10% salvage chance on a win, on any legion' },
+};
+function loadStoredCommander(){
+  if(!hasStorage()) return null;
+  try{
+    const raw = window.localStorage.getItem(COMMANDER_KEY);
+    if(!raw) return null;
+    const d = JSON.parse(raw);
+    if(!d || typeof d.xp!=='number' || typeof d.level!=='number') return null;
+    return { xp: Math.max(0, Math.round(d.xp)), level: Math.max(1, Math.min(MAX_COMMANDER_LEVEL, Math.round(d.level))) };
+  }catch(e){ return null; }
+}
+function saveStoredCommander(){
+  if(!hasStorage()) return;
+  try{ window.localStorage.setItem(COMMANDER_KEY, JSON.stringify({ xp:commander.xp, level:commander.level })); }
+  catch(e){ /* a browser that refuses storage just means this device won't remember rank */ }
+}
+let commander = loadStoredCommander() || { xp:0, level:1 };
+
+function commanderXpFloor(){ return COMMANDER_XP[Math.max(0, commander.level-1)] || 0; }
+function commanderXpNext(){ return (commander.level >= MAX_COMMANDER_LEVEL) ? null : COMMANDER_XP[commander.level]; }
+function commanderXpPct(){
+  const next = commanderXpNext();
+  if(next===null) return 100;
+  const floor = commanderXpFloor();
+  return Math.max(0, Math.min(100, Math.round(((commander.xp-floor) / (next-floor)) * 100)));
+}
+function commanderHasPerk(key){
+  for(let l=2; l<=commander.level; l++){ if(COMMANDER_PERKS[l] && COMMANDER_PERKS[l].key===key) return true; }
+  return false;
+}
+/* Returns the new level if this award crossed one, else null. */
+function commanderAddXp(n){
+  if(!(n>0)) return null;
+  const before = commander.level;
+  commander.xp += Math.round(n);
+  while(commander.level<MAX_COMMANDER_LEVEL && commander.xp>=COMMANDER_XP[commander.level]) commander.level++;
+  saveStoredCommander();
+  return commander.level>before ? commander.level : null;
+}
+function rosterCap(){
+  return 18 + (commanderHasPerk('roster_slot')?1:0) + (commanderHasPerk('roster_slot2')?1:0);
+}
+function goCommanderRank(){ state.screen='commander'; render(); }
+function renderCommanderRank(){
+  const lvl = commander.level, next = commanderXpNext();
+  const perkRows = Object.keys(COMMANDER_PERKS).map(l=>{
+    const P = COMMANDER_PERKS[l], have = lvl >= Number(l);
+    return `<div style="color:${have?'var(--gold)':'var(--dim)'}; font-size:16px;">
+      ${have?'✔':'○'} <b>Lv.${l} ${P.name}</b> — ${P.desc}</div>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">🎖 COMMANDER RANK</h2>
+    <p class="dim">Your own record, separate from any one legion. It never resets — not on a wipe, not on a fresh start, not when you prestige into the Deep.</p>
+    <div style="font-size:26px; color:var(--gold); margin-top:8px;">Level ${lvl}</div>
+    <div class="gauge-bg" style="margin-top:6px;"><div class="gauge-fill" style="width:${commanderXpPct()}%"></div></div>
+    <div class="dim" style="font-size:15px;">${next===null
+      ? `${commander.xp.toLocaleString()} XP — maximum rank reached`
+      : `${commander.xp.toLocaleString()} / ${next.toLocaleString()} XP to Level ${lvl+1}`}</div>
+    <p class="dim" style="margin-top:8px;">Earned from every stage battle you fight, win or lose, on every legion.</p>
+    <div style="margin-top:8px;">${perkRows}</div>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
+/* ================= VICTORY PORTRAIT =================
+   A small CSS-drawn scene generated after a genuinely big win — a boss (or
+   warlord) kill, or a clean campaign finale — themed by whichever unit
+   carried the fight. Attached to the matching War Journal entry so it stays
+   visible after the result screen is gone.
+   ======================================================= */
+function victoryPortrait(result){
+  const b = state.battle; if(!b || result!=='win') return null;
+  const bossDef = bossForStage(state.stage);
+  const finale = state.stage===CAMPAIGN_LENGTH;
+  if(!bossDef && !finale) return null;   // only genuinely big wins get a portrait
+
+  let mvpId = null, mvpDmg = 0;
+  Object.keys(b.dmgByUnitId||{}).forEach(id=>{
+    if(b.dmgByUnitId[id] > mvpDmg){ mvpDmg = b.dmgByUnitId[id]; mvpId = id; }
+  });
+  const mvp = mvpId ? b.playerUnits.find(u=>u.id===mvpId) : null;
+  const element = mvp ? mvp.element : 'volt';
+  const label = isDeep(state.stage) ? `Depth ${deepDepth(state.stage)}` : `Stage ${state.stage}`;
+  return {
+    element, mvpName: mvp ? mvp.name : null, mvpEmoji: mvp ? mvp.emoji : '⚔',
+    label, bossName: bossDef ? bossDef.name : null, bossEmoji: bossDef ? bossDef.emoji : null,
+    finale, warlord: !!(bossDef && bossDef.isWarlord), faction: (bossDef && bossDef.faction) || null,
+  };
+}
+function renderVictoryPortrait(p){
+  if(!p) return '';
+  const glow = 'var(--'+p.element+')';
+  const title = p.finale ? 'THE GATE FALLS' : (p.bossName || 'VICTORY');
+  return `
+  <div class="panel" style="text-align:center; overflow:hidden; position:relative;
+       background:radial-gradient(circle at 50% 30%, ${glow}22, var(--bg2) 70%);">
+    <div style="font-size:11px; letter-spacing:2px; color:${glow};">${p.warlord ? (p.faction||'WARLORD').toUpperCase() : (p.finale?'CAMPAIGN COMPLETE':'COMMANDER DOWN')}</div>
+    <div style="font-size:54px; margin:10px 0; filter:drop-shadow(0 0 14px ${glow});">${p.bossEmoji || p.mvpEmoji}</div>
+    <h2 class="section" style="border:none; justify-content:center;">${escapeHtml(title)}</h2>
+    <div class="dim" style="font-size:15px;">${escapeHtml(p.label)}</div>
+    ${p.mvpName ? `<div style="margin-top:8px; font-size:16px;">${p.mvpEmoji} <b style="color:${glow};">${escapeHtml(p.mvpName)}</b> carried the fight</div>` : ''}
+  </div>`;
 }
 
 /* ============ BATTLE RENDER ============ */
@@ -4426,7 +4741,7 @@ function renderUnit(u, activeId, validTargetIds){
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
     ${u.trait&&!u.corruption?`<div class="rust-tag" style="color:var(--volt)" title="${traitName(u.trait)}: ${traitDesc(u.trait)}">${TRAITS[u.trait.key].emoji}</div>`:''}
     <div class="emoji">${u.emoji}</div>
-    <div class="uname">${u.name}</div>
+    <div class="uname">${u.name}${u.mentorRookie?` <span title="Mentor Bond: paired with a veteran — earning bonus EXP this fight">🌱</span>`:''}${u.mentorVeteran?` <span title="Mentor Bond: mentoring a rookie — fighting sharper for it">🎓</span>`:''}</div>
     <div class="hpbar-bg"><div class="hpbar-fill ${(!jammed&&pct<30)?'low':''}" style="width:${pct}%; ${jammed?'background:repeating-linear-gradient(90deg,var(--dim) 0 4px,#000 4px 8px);':''}"></div></div>
     <div class="cd-tag">${u.fainted?'DOWN':(u.skillCd>0?'skill:'+u.skillCd:'skill ready')}</div>
     <div class="status-tag">${statusIconLine(u)}</div>
@@ -4634,7 +4949,9 @@ function renderResult(){
       <div class="row" style="justify-content:center; margin-top:14px;">
         <button class="btn primary" style="font-size:22px;" onclick="advanceStage()">⬇ DESCEND INTO THE DEEP</button>
       </div>
-    </div>`;
+    </div>
+    ${renderVictoryPortrait(r.portrait)}
+    ${r.commanderLevel ? `<div class="panel" style="text-align:center;"><p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p></div>` : ''}`;
   }
   if(r.win){
     const pd = r.part ? PARTS[r.part.key] : null;
@@ -4653,7 +4970,9 @@ function renderResult(){
       ${r.dom ? `<p class="dim">📡 The Rustbound log your <b>${r.dom.toUpperCase()}</b> assault. Next deployment they will expect <b>${(r.nextAdapt||r.dom).toUpperCase()}</b>.</p>` : ''}
       <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
       <button class="btn primary" style="margin-top:10px;" onclick="advanceStage()">${isDeep(state.stage)?'Descend further →':'Continue →'}</button>
-    </div>`;
+    </div>
+    ${renderVictoryPortrait(r.portrait)}
+    ${r.commanderLevel ? `<div class="panel" style="text-align:center;"><p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p></div>` : ''}`;
   }
   return `
   <div class="panel" style="text-align:center;">
@@ -4663,6 +4982,7 @@ function renderResult(){
     ${r.levelled && r.levelled.length ? `<p style="color:var(--gold)">⬆ Level up: ${r.levelled.join(', ')}</p>` : ''}
     <p class="dim">Adjust your formation, re-plate your beasts, and go again.</p>
     <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
+    ${r.commanderLevel ? `<p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p>` : ''}
     <button class="btn primary" style="margin-top:10px;" onclick="retryStage()">Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →</button>
   </div>`;
 }

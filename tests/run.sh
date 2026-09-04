@@ -51,6 +51,10 @@ run ai-audio-coach  dom-storage-server.js "$H/assert.js" "$S/13-ai-audio-tutoria
 run harvest-codex   dom-storage-server.js "$H/assert.js" "$S/14-harvest-codex-tactical.js"
 run legion-identity dom-storage-server.js "$H/assert.js" "$S/15-legion-identity.js"
 run war-journal     dom-storage-server.js "$H/assert.js" "$S/16-war-journal.js"
+run commander-victory dom-storage-server.js "$H/assert.js" "$S/17-commander-victory.js"
+run warlord-factions  dom-storage-server.js "$H/assert.js" "$S/18-warlord-factions.js"
+run guild-council      dom-storage-server.js "$H/assert.js" "$S/19-guild-council.js"
+run mentor-bonds       dom-storage-server.js "$H/assert.js" "$S/20-mentor-bonds.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"
