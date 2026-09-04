@@ -247,22 +247,34 @@
 const ELEM_BEATS = { fire:'nature', nature:'water', water:'fire', earth:'volt', volt:'wind', wind:'earth' };
 
 const SPECIES = {
-  emberling: { name:'Emberling', element:'fire', emoji:'🔥', base:{hp:32, atk:11, def:6, spd:9}, skill:'Cinder Burst' },
-  aqualing:  { name:'Aqualing',  element:'water', emoji:'💧', base:{hp:34, atk:9,  def:8, spd:8}, skill:'Tide Slam' },
-  mossling:  { name:'Mossling',  element:'nature', emoji:'🌿', base:{hp:36, atk:8,  def:9, spd:7}, skill:'Thorn Whip' },
-  terrafang: { name:'Terrafang', element:'earth', emoji:'🪨', base:{hp:40, atk:10, def:10, spd:5}, skill:'Boulder Crush' },
-  galekit:   { name:'Galekit',   element:'wind', emoji:'🌪️', base:{hp:28, atk:10, def:5, spd:12}, skill:'Cyclone Slash' },
-  voltcub:   { name:'Voltcub',   element:'volt', emoji:'⚡', base:{hp:26, atk:12, def:5, spd:11}, skill:'Static Fang' },
+  emberling: { name:'Emberling', element:'fire', emoji:'🔥', base:{hp:32, atk:11, def:6, spd:9}, skill:'Cinder Burst',
+    sprite:{shape:'organic', accents:['ears','tail'], eyes:2} },
+  aqualing:  { name:'Aqualing',  element:'water', emoji:'💧', base:{hp:34, atk:9,  def:8, spd:8}, skill:'Tide Slam',
+    sprite:{shape:'organic', accents:['fin','tail'], eyes:2} },
+  mossling:  { name:'Mossling',  element:'nature', emoji:'🌿', base:{hp:36, atk:8,  def:9, spd:7}, skill:'Thorn Whip',
+    sprite:{shape:'organic', accents:['ears','crest'], eyes:2} },
+  terrafang: { name:'Terrafang', element:'earth', emoji:'🪨', base:{hp:40, atk:10, def:10, spd:5}, skill:'Boulder Crush',
+    sprite:{shape:'organic', accents:['horns','spikes'], eyes:2} },
+  galekit:   { name:'Galekit',   element:'wind', emoji:'🌪️', base:{hp:28, atk:10, def:5, spd:12}, skill:'Cyclone Slash',
+    sprite:{shape:'organic', accents:['ears','tail','wings'], eyes:2} },
+  voltcub:   { name:'Voltcub',   element:'volt', emoji:'⚡', base:{hp:26, atk:12, def:5, spd:11}, skill:'Static Fang',
+    sprite:{shape:'organic', accents:['ears','antenna'], eyes:2} },
 };
 const SPECIES_IDS = Object.keys(SPECIES);
 
 const ENEMY_SPECIES = {
-  scraphound: { name:'Scraphound', element:'earth', emoji:'🤖', base:{hp:34, atk:9, def:9, spd:6}, skill:'Scrap Slam' },
-  sparkdrone: { name:'Sparkdrone', element:'volt', emoji:'🛸', base:{hp:26, atk:11, def:5, spd:11}, skill:'Overload' },
-  cinderjaw:  { name:'Cinderjaw',  element:'fire', emoji:'👾', base:{hp:30, atk:11, def:6, spd:9}, skill:'Napalm Bite' },
-  frostcoil:  { name:'Frostcoil',  element:'water', emoji:'🦾', base:{hp:32, atk:9, def:8, spd:8}, skill:'Cryo Lash' },
-  thornbot:   { name:'Thornbot',   element:'nature', emoji:'🕷️', base:{hp:34, atk:8, def:9, spd:7}, skill:'Rust Vines' },
-  galekite:   { name:'Galekite',   element:'wind', emoji:'🛩️', base:{hp:24, atk:10, def:5, spd:13}, skill:'Shear Gust' },
+  scraphound: { name:'Scraphound', element:'earth', emoji:'🤖', base:{hp:34, atk:9, def:9, spd:6}, skill:'Scrap Slam',
+    sprite:{shape:'mech', accents:['ears','legs','tail'], eyes:2} },
+  sparkdrone: { name:'Sparkdrone', element:'volt', emoji:'🛸', base:{hp:26, atk:11, def:5, spd:11}, skill:'Overload',
+    sprite:{shape:'disc', accents:['antenna','wings'], eyes:1} },
+  cinderjaw:  { name:'Cinderjaw',  element:'fire', emoji:'👾', base:{hp:30, atk:11, def:6, spd:9}, skill:'Napalm Bite',
+    sprite:{shape:'mech', accents:['horns','spikes'], eyes:2} },
+  frostcoil:  { name:'Frostcoil',  element:'water', emoji:'🦾', base:{hp:32, atk:9, def:8, spd:8}, skill:'Cryo Lash',
+    sprite:{shape:'core', accents:['tentacles','fin'], eyes:2} },
+  thornbot:   { name:'Thornbot',   element:'nature', emoji:'🕷️', base:{hp:34, atk:8, def:9, spd:7}, skill:'Rust Vines',
+    sprite:{shape:'mech', accents:['legs','spikes','antenna'], eyes:3} },
+  galekite:   { name:'Galekite',   element:'wind', emoji:'🛩️', base:{hp:24, atk:10, def:5, spd:13}, skill:'Shear Gust',
+    sprite:{shape:'disc', accents:['wings','tail'], eyes:1} },
 };
 const ENEMY_IDS = Object.keys(ENEMY_SPECIES);
 
@@ -276,6 +288,112 @@ const PARTS = {
   galekite:   { name:'Shear Rotor',   emoji:'🌀', element:'wind',   stat:'spd', pct:0.32, corruption:22, desc:'Screams above 4000 RPM.' },
 };
 const STAT_LABEL = { hp:'HP', atk:'ATK', def:'DEF', spd:'SPD' };
+
+/* ============ PROCEDURAL SPRITES ============
+   Every creature/boss data entry (SPECIES, ENEMY_SPECIES, HYBRID_SPECIES,
+   BOSSES, DEEP_BOSS, WARLORDS) carries a `sprite` recipe alongside its
+   `emoji`:  { shape, accents:[...], eyes, scale }
+     shape   — one of SPRITE_SHAPES: the body silhouette.
+     accents — names from SPRITE_ACCENTS layered on top (ears, horns, ...).
+     eyes    — how many eye-dots to draw (1-4).
+     scale   — optional size multiplier (bosses run 1.15-1.6).
+   Colors are never stored in the recipe — spriteSvg() resolves them from
+   the creature's live element(s) via elemColor(), so a sprite automatically
+   tracks the same --fire/--water/... palette used everywhere else and a
+   dual-element hybrid gets a genuinely two-toned body+accent split.
+   Built entirely from primitives (ellipse/rect/polygon/simple paths) rather
+   than hand-authored bezier blobs, specifically so the geometry is cheap to
+   reason about and verify without round after round of visual iteration. */
+const SPRITE_SHAPES = ['organic','mech','disc','core'];
+function elemColor(e){ return 'var(--'+(e||'earth')+')'; }
+
+function spBodyShape(shape, color){
+  switch(shape){
+    case 'mech': return `<rect x="20" y="28" width="60" height="50" rx="10" fill="${color}"/><rect x="30" y="8" width="40" height="28" rx="8" fill="${color}"/>`;
+    case 'disc': return `<ellipse cx="50" cy="52" rx="36" ry="15" fill="${color}"/><ellipse cx="50" cy="38" rx="17" ry="13" fill="${color}" opacity="0.85"/>`;
+    case 'core': return `<polygon points="50,6 86,50 50,94 14,50" fill="${color}"/>`;
+    default:     return `<ellipse cx="50" cy="64" rx="29" ry="25" fill="${color}"/><circle cx="50" cy="31" r="20" fill="${color}"/>`;
+  }
+}
+function spEyes(shape, n, color){
+  n = Math.max(1, Math.min(4, Math.round(n)||2));
+  const cy = shape==='disc' ? 38 : (shape==='mech' ? 22 : 30);
+  const spread = n===1 ? 0 : (n===2 ? 18 : (n===3 ? 15 : 12));
+  let out = '';
+  for(let i=0;i<n;i++){
+    const cx = 50 + (i - (n-1)/2) * spread;
+    out += `<circle cx="${cx}" cy="${cy}" r="4.5" fill="#eef6ff"/><circle cx="${cx}" cy="${cy}" r="2.2" fill="${color}"/>`;
+  }
+  return out;
+}
+/* Each accent is a small pure function of an accent color to an SVG
+   fragment, positioned against the 0-100 body coordinate space (the
+   viewBox itself is padded to -15..115 so horns/wings/tails can extend
+   past the body without clipping). */
+const SPRITE_ACCENTS = {
+  ears:      c=>`<polygon points="33,20 39,1 47,22" fill="${c}"/><polygon points="67,20 61,1 53,22" fill="${c}"/>`,
+  horns:     c=>`<polygon points="36,16 26,-8 45,19" fill="${c}"/><polygon points="64,16 74,-8 55,19" fill="${c}"/>`,
+  wings:     c=>`<polygon points="21,58 -12,42 24,76" fill="${c}" opacity="0.88"/><polygon points="79,58 112,42 76,76" fill="${c}" opacity="0.88"/>`,
+  tail:      c=>`<path d="M76,72 Q102,78 93,101 Q79,92 71,76 Z" fill="${c}"/>`,
+  fin:       c=>`<polygon points="57,18 74,-9 64,24" fill="${c}"/>`,
+  antenna:   c=>`<line x1="42" y1="10" x2="34" y2="-11" stroke="${c}" stroke-width="3" stroke-linecap="round"/><circle cx="34" cy="-13" r="4" fill="${c}"/><line x1="58" y1="10" x2="66" y2="-11" stroke="${c}" stroke-width="3" stroke-linecap="round"/><circle cx="66" cy="-13" r="4" fill="${c}"/>`,
+  crest:     c=>`<polygon points="50,4 41,-14 50,-2 59,-14" fill="${c}"/>`,
+  spikes:    c=>[0,1,2,3].map(i=>{ const x=28+i*15; return `<polygon points="${x},30 ${x+6},14 ${x+12},30" fill="${c}"/>`; }).join(''),
+  stinger:   c=>`<path d="M74,76 Q100,90 84,108 Q74,96 68,80 Z" fill="${c}"/>`,
+  tentacles: c=>[0,1,2,3].map(i=>{ const x=30+i*14; return `<path d="M${x},86 Q${x-6},102 ${x+2},116" stroke="${c}" stroke-width="5" fill="none" stroke-linecap="round"/>`; }).join(''),
+  legs:      c=>[0,1,2,3].map(i=>{ const x=26+i*16; return `<rect x="${x}" y="86" width="8" height="17" rx="3" fill="${c}"/>`; }).join(''),
+};
+const SPRITE_ACCENT_IDS = Object.keys(SPRITE_ACCENTS);
+/* A shared small-drone look for commander-fight generators (shield pylons,
+   guard drones, feeder arms) — they're functionally identical fixtures
+   regardless of which boss summoned them, so one recipe covers all of them. */
+const GEN_SPRITE = { shape:'disc', accents:['antenna'], eyes:1 };
+
+/* recipe -> self-contained inline <svg>. `elements` may be a single element
+   id or an array (a hybrid's two elements split body/accent color). size is
+   the rendered pixel box before `recipe.scale` is applied. */
+function spriteSvg(recipe, elements, size){
+  if(!recipe) return '';
+  size = size || 40;
+  const els = (Array.isArray(elements) ? elements : [elements]).filter(Boolean);
+  const bodyColor = elemColor(els[0]);
+  const accentColor = elemColor(els[1] || els[0]);
+  const scale = recipe.scale || 1;
+  const px = Math.round(size * scale);
+  const glow = els[0] ? `filter:drop-shadow(0 0 ${Math.max(2,Math.round(4*scale))}px ${elemColor(els[0])}88);` : '';
+  const accents = (recipe.accents||[]).map(a => SPRITE_ACCENTS[a] ? SPRITE_ACCENTS[a](accentColor) : '').join('');
+  return `<svg viewBox="-15 -15 130 130" width="${px}" height="${px}" style="${glow}flex:none;">`
+       + spBodyShape(SPRITE_SHAPES.includes(recipe.shape)?recipe.shape:'organic', bodyColor)
+       + accents
+       + spEyes(recipe.shape, recipe.eyes, '#1a1a22')
+       + `</svg>`;
+}
+/* A defensive sanitizer for a sprite recipe pulled back out of localStorage
+   (Victory Portrait snapshots persist one) — never trust stored shape/accent
+   strings against the live SPRITE_SHAPES/SPRITE_ACCENTS tables blindly. */
+function reviveSpriteRecipe(s){
+  if(!s || typeof s!=='object') return null;
+  if(typeof s.shape!=='string' || !SPRITE_SHAPES.includes(s.shape)) return null;
+  const accents = Array.isArray(s.accents) ? s.accents.filter(a=>SPRITE_ACCENT_IDS.includes(a)).slice(0,4) : [];
+  const eyes = (typeof s.eyes==='number' && isFinite(s.eyes)) ? Math.max(1, Math.min(4, Math.round(s.eyes))) : 2;
+  const scale = (typeof s.scale==='number' && isFinite(s.scale)) ? Math.max(0.5, Math.min(2.5, s.scale)) : 1;
+  return { shape:s.shape, accents, eyes, scale };
+}
+/* Card/bestiary sites: known + a sprite -> svg; known but no sprite (should
+   not happen once every table entry has one, but stay defensive) -> emoji;
+   unknown -> the '?' placeholder they already show. */
+function spriteOrEmoji(entry, known, size){
+  if(!known) return '❓';
+  if(entry && entry.sprite) return spriteSvg(entry.sprite, (entry.elements&&entry.elements.length)?entry.elements:[entry.element], size);
+  return entry ? entry.emoji : '❓';
+}
+/* Battle units: always visible (no fog-of-war gate), and carry their own
+   resolved .elements/.element already. */
+function unitSpriteHtml(u, size){
+  if(!u) return '';
+  if(u.sprite) return spriteSvg(u.sprite, (u.elements&&u.elements.length)?u.elements:[u.element], size);
+  return u.emoji||'';
+}
 
 /* ---- The Forge: burns 3 of the same raw part into one named, stronger
        part carrying a second stat the raw part never had. Forged parts are
@@ -345,6 +463,28 @@ const ELEM_TRAIT = {
 function hybridKey(a,b){ return [a,b].sort().join('+'); }
 function hybridIdFor(a,b){ return 'hyb_' + [a,b].sort().join('_'); }
 
+/* One sprite recipe per hybrid key, keyed the same way as HYBRIDS itself.
+   Any pair missing here (there shouldn't be any) falls back to a plain
+   organic/fin/tail default in the generator loop below. */
+const HYBRID_SPRITES = {
+  'fire+water':   {shape:'organic', accents:['fin','antenna'], eyes:2},
+  'fire+nature':  {shape:'organic', accents:['crest','tail'], eyes:2},
+  'earth+fire':   {shape:'mech',    accents:['horns','spikes'], eyes:2},
+  'fire+volt':    {shape:'core',    accents:['spikes','antenna'], eyes:1},
+  'fire+wind':    {shape:'organic', accents:['wings','crest'], eyes:2},
+  'nature+water': {shape:'organic', accents:['ears','fin'], eyes:2},
+  'earth+water':  {shape:'mech',    accents:['fin','legs'], eyes:2},
+  'volt+water':   {shape:'core',    accents:['tentacles','fin'], eyes:1},
+  'water+wind':   {shape:'disc',    accents:['wings','tail'], eyes:1},
+  'earth+nature': {shape:'organic', accents:['horns','spikes'], eyes:2},
+  'nature+volt':  {shape:'organic', accents:['crest','antenna'], eyes:2},
+  'nature+wind':  {shape:'organic', accents:['wings','antenna'], eyes:2},
+  'earth+volt':   {shape:'core',    accents:['horns','spikes'], eyes:1},
+  'earth+wind':   {shape:'mech',    accents:['stinger','legs','spikes'], eyes:2},
+  'volt+wind':    {shape:'disc',    accents:['wings','antenna'], eyes:1},
+};
+const HYBRID_SPRITE_DEFAULT = { shape:'organic', accents:['fin','tail'], eyes:2 };
+
 const HYBRID_SPECIES = {};
 Object.keys(HYBRIDS).forEach(key=>{
   const els = key.split('+');
@@ -354,6 +494,7 @@ Object.keys(HYBRIDS).forEach(key=>{
     name: HYBRIDS[key].name, emoji: HYBRIDS[key].emoji, skill: HYBRIDS[key].skill,
     element: els[0], elements: els.slice(), hybrid: true,
     base: { hp:blend('hp'), atk:blend('atk'), def:blend('def'), spd:blend('spd') },
+    sprite: HYBRID_SPRITES[key] || HYBRID_SPRITE_DEFAULT,
   };
 });
 function isHybridId(id){ return !!HYBRID_SPECIES[id]; }
@@ -480,17 +621,23 @@ const FAVOR_BLESSING = 75;   // tribe grants its blessing
 
 /* A champion: the tribe's best, only offered once you have earned it. */
 const CHAMPIONS = {
-  fire:   { id:'pyrelord',   name:'Pyrelord',   emoji:'🦂', base:{hp:40, atk:15, def:8,  spd:11}, skill:'Ashfall' },
-  water:  { id:'tidewarden', name:'Tidewarden', emoji:'🐋', base:{hp:46, atk:12, def:12, spd:9},  skill:'Undertow' },
-  nature: { id:'grovemother',name:'Grovemother',emoji:'🦌', base:{hp:48, atk:11, def:13, spd:8},  skill:'Bloomsurge' },
-  earth:  { id:'stonefather',name:'Stonefather',emoji:'🦏', base:{hp:54, atk:13, def:15, spd:6},  skill:'Tectonic Slam' },
-  volt:   { id:'stormcaller',name:'Stormcaller',emoji:'🦅', base:{hp:36, atk:16, def:7,  spd:14}, skill:'Thunderhead' },
-  wind:   { id:'skydancer',  name:'Skydancer',  emoji:'🦋', base:{hp:38, atk:14, def:7,  spd:15}, skill:'Tempest Waltz' },
+  fire:   { id:'pyrelord',   name:'Pyrelord',   emoji:'🦂', base:{hp:40, atk:15, def:8,  spd:11}, skill:'Ashfall',
+    sprite:{shape:'mech', accents:['horns','stinger','spikes'], eyes:2, scale:1.15} },
+  water:  { id:'tidewarden', name:'Tidewarden', emoji:'🐋', base:{hp:46, atk:12, def:12, spd:9},  skill:'Undertow',
+    sprite:{shape:'organic', accents:['fin','tail'], eyes:2, scale:1.2} },
+  nature: { id:'grovemother',name:'Grovemother',emoji:'🦌', base:{hp:48, atk:11, def:13, spd:8},  skill:'Bloomsurge',
+    sprite:{shape:'organic', accents:['horns','ears','tail'], eyes:2, scale:1.15} },
+  earth:  { id:'stonefather',name:'Stonefather',emoji:'🦏', base:{hp:54, atk:13, def:15, spd:6},  skill:'Tectonic Slam',
+    sprite:{shape:'mech', accents:['horns','spikes','legs'], eyes:2, scale:1.2} },
+  volt:   { id:'stormcaller',name:'Stormcaller',emoji:'🦅', base:{hp:36, atk:16, def:7,  spd:14}, skill:'Thunderhead',
+    sprite:{shape:'organic', accents:['wings','crest'], eyes:2, scale:1.15} },
+  wind:   { id:'skydancer',  name:'Skydancer',  emoji:'🦋', base:{hp:38, atk:14, def:7,  spd:15}, skill:'Tempest Waltz',
+    sprite:{shape:'organic', accents:['wings','antenna'], eyes:2, scale:1.1} },
 };
 /* Register champions as real species so fusion, parts and traits all work on them. */
 TRIBE_IDS.forEach(e=>{
   const c = CHAMPIONS[e];
-  SPECIES[c.id] = { name:c.name, element:e, emoji:c.emoji, base:c.base, skill:c.skill, champion:true };
+  SPECIES[c.id] = { name:c.name, element:e, emoji:c.emoji, base:c.base, skill:c.skill, champion:true, sprite:c.sprite };
 });
 const CHAMPION_IDS = TRIBE_IDS.map(e=>CHAMPIONS[e].id);
 function isChampionId(id){ return CHAMPION_IDS.indexOf(id)>=0; }
@@ -535,18 +682,21 @@ const BOSSES = {
     mult:{ hp:3.4, atk:1.25, def:1.5, spd:0.85 },
     gens:2, genName:'Shield Pylon', genEmoji:'🔷', genElement:'volt',
     intro:'A Foundry Overseer grinds forward behind a pair of shield pylons.',
+    sprite:{shape:'mech', accents:['horns','spikes','legs'], eyes:2, scale:1.5},
   },
   9: {
     name:'Rustbound Marshal', emoji:'🤖', element:'volt', skill:'Command Override',
     mult:{ hp:3.8, atk:1.35, def:1.5, spd:1.0 },
     gens:3, genName:'Guard Drone', genEmoji:'🔶', genElement:'wind',
     intro:'The Marshal advances, ringed by its personal guard.',
+    sprite:{shape:'mech', accents:['antenna','spikes','legs'], eyes:2, scale:1.5},
   },
   10: {
     name:'Gate Warden', emoji:'👹', element:'fire', skill:'Immolation Protocol',
     mult:{ hp:4.4, atk:1.45, def:1.6, spd:0.95 },
     gens:3, genName:'Bulwark Pylon', genEmoji:'🔷', genElement:'earth',
     intro:'The Gate Warden fills the breach, its bulwarks humming.',
+    sprite:{shape:'mech', accents:['horns','spikes','wings'], eyes:2, scale:1.6},
   },
 };
 const DEEP_BOSS = {
@@ -554,6 +704,7 @@ const DEEP_BOSS = {
   mult:{ hp:4.6, atk:1.5, def:1.6, spd:1.0 },
   gens:3, genName:'Feeder Arm', genEmoji:'🔶', genElement:'earth',
   intro:'A Foundry Core hauls itself up from the assembly floor.',
+  sprite:{shape:'core', accents:['spikes','tentacles','antenna'], eyes:1, scale:1.6},
 };
 /* ---- Warlord sub-factions: named enemy leaders beyond the standard Rustbound,
    with their own look and skill kit. They use the exact same boss-fight rig
@@ -563,13 +714,16 @@ const DEEP_BOSS = {
 const WARLORDS = {
   ashclaw:   { name:'Warlord Ashclaw',   emoji:'🐉', element:'fire',  skill:'Cinder Warpath',
     mult:{ hp:3.0, atk:1.4, def:1.2, spd:1.1 }, gens:1, genName:'Kindling Drone', genEmoji:'🔥', genElement:'fire',
-    intro:'Warlord Ashclaw stalks in on legs of scavenged flame-plate.', isWarlord:true, faction:'The Ashclaw Warband' },
+    intro:'Warlord Ashclaw stalks in on legs of scavenged flame-plate.', isWarlord:true, faction:'The Ashclaw Warband',
+    sprite:{shape:'organic', accents:['horns','wings','tail','spikes'], eyes:2, scale:1.5} },
   tidewrack: { name:'Warlord Tidewrack', emoji:'🐙', element:'water', skill:'Undertow Protocol',
     mult:{ hp:3.2, atk:1.2, def:1.4, spd:1.0 }, gens:2, genName:'Ballast Drone', genEmoji:'💧', genElement:'water',
-    intro:'Warlord Tidewrack surfaces, trailing a wake of ballast drones.', isWarlord:true, faction:'The Tidewrack Cartel' },
+    intro:'Warlord Tidewrack surfaces, trailing a wake of ballast drones.', isWarlord:true, faction:'The Tidewrack Cartel',
+    sprite:{shape:'organic', accents:['tentacles','fin'], eyes:2, scale:1.5} },
   galevane:  { name:'Warlord Galevane',  emoji:'🦂', element:'wind',  skill:'Shear Cascade',
     mult:{ hp:2.8, atk:1.5, def:1.1, spd:1.35 }, gens:1, genName:'Vane Drone', genEmoji:'🌪', genElement:'wind',
-    intro:'Warlord Galevane arrives on a screaming rotor-frame.', isWarlord:true, faction:'The Galevane Sept' },
+    intro:'Warlord Galevane arrives on a screaming rotor-frame.', isWarlord:true, faction:'The Galevane Sept',
+    sprite:{shape:'mech', accents:['stinger','wings','legs'], eyes:2, scale:1.4} },
 };
 const WARLORD_ORDER = ['ashclaw','tidewrack','galevane'];
 /* One guaranteed campaign appearance at stage 7 (open between the stage-5 and
@@ -1332,9 +1486,11 @@ function revivePortrait(p){
     element: p.element,
     mvpName: typeof p.mvpName==='string' ? p.mvpName.slice(0,40) : null,
     mvpEmoji: typeof p.mvpEmoji==='string' ? p.mvpEmoji.slice(0,8) : '⚔',
+    mvpSprite: reviveSpriteRecipe(p.mvpSprite),
     label: p.label.slice(0,40),
     bossName: typeof p.bossName==='string' ? p.bossName.slice(0,40) : null,
     bossEmoji: typeof p.bossEmoji==='string' ? p.bossEmoji.slice(0,8) : null,
+    bossSprite: reviveSpriteRecipe(p.bossSprite),
     finale: p.finale === true,
     warlord: p.warlord === true,
     faction: typeof p.faction==='string' ? p.faction.slice(0,40) : null,
@@ -1660,7 +1816,7 @@ function getSpeciesData(speciesId, tier){
     return {
       name: 'Ascended ' + base.name, element: base.element,
       elements: base.elements ? base.elements.slice() : null,
-      hybrid: !!base.hybrid, emoji: base.emoji + '👑',
+      hybrid: !!base.hybrid, emoji: base.emoji + '👑', sprite: base.sprite,
       base: { hp: Math.round(base.base.hp*2.3), atk: Math.round(base.base.atk*2.3), def: Math.round(base.base.def*2.3), spd: Math.round(base.base.spd*1.3) },
       skill: base.skill + '++',
     };
@@ -1669,7 +1825,7 @@ function getSpeciesData(speciesId, tier){
     return {
       name: 'Prime ' + base.name, element: base.element,
       elements: base.elements ? base.elements.slice() : null,
-      hybrid: !!base.hybrid, emoji: base.emoji + '✨',
+      hybrid: !!base.hybrid, emoji: base.emoji + '✨', sprite: base.sprite,
       base: { hp: Math.round(base.base.hp*1.6), atk: Math.round(base.base.atk*1.6), def: Math.round(base.base.def*1.6), spd: Math.round(base.base.spd*1.15) },
       skill: base.skill + '+',
     };
@@ -1725,7 +1881,7 @@ function computeStats(monster){
   }
   const corruption = monsterCorruption(monster);
   return {
-    name: sd.name, emoji: sd.emoji + ((monster.parts||[]).length?'⚙':''),
+    name: sd.name, emoji: sd.emoji + ((monster.parts||[]).length?'⚙':''), sprite: sd.sprite,
     element: sd.element, elements, innate, hybrid: !!sd.hybrid, skill: sd.skill,
     trait: tr || null, tier: monster.tier, grafts: g,
     hp, atk, def, spd, corruption,
@@ -2098,7 +2254,7 @@ function renderCodex(){
   const speciesCards = Object.keys(SPECIES).map(id=>{
     const sd = SPECIES[id], known = c.species[id];
     return `<div class="mcard" style="width:104px; cursor:default; ${known?'':'opacity:0.3'}">
-      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="emoji">${spriteOrEmoji(sd, known, 44)}</div>
       <div class="name">${known?sd.name:'???'}</div>
       ${known?`<span class="elem-tag elem-${sd.element}">${sd.element}</span>
         <div class="dim" style="font-size:13px;">HP ${sd.base.hp} · ATK ${sd.base.atk}<br>DEF ${sd.base.def} · SPD ${sd.base.spd}</div>
@@ -2109,7 +2265,7 @@ function renderCodex(){
   const enemyCards = ENEMY_IDS.map(id=>{
     const sd = ENEMY_SPECIES[id], known = c.enemies[id];
     return `<div class="mcard" style="width:104px; cursor:default; ${known?'':'opacity:0.3'}">
-      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="emoji">${spriteOrEmoji(sd, known, 44)}</div>
       <div class="name">${known?sd.name:'???'}</div>
       ${known?`<span class="elem-tag elem-${sd.element}">${sd.element}</span>
         <div class="dim" style="font-size:13px;">drops ${PARTS[id].emoji} ${escapeHtml(PARTS[id].name)}</div>`:''}
@@ -2119,7 +2275,7 @@ function renderCodex(){
   const hybridCards = Object.keys(HYBRID_SPECIES).map(id=>{
     const sd = HYBRID_SPECIES[id], known = c.hybrids[id];
     return `<div class="mcard" style="width:104px; cursor:default; ${known?'':'opacity:0.3'}">
-      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="emoji">${spriteOrEmoji(sd, known, 44)}</div>
       <div class="name">${known?sd.name:'???'}</div>
       ${elemTags(sd.elements)}
       ${known?`<div style="font-size:13px; color:var(--wind)">${escapeHtml(sd.skill)}</div>`:''}
@@ -2130,7 +2286,7 @@ function renderCodex(){
   const bossCards = bossNames.map(bd=>{
     const known = c.bosses[bd.name];
     return `<div class="mcard" style="width:130px; cursor:default; ${known?'':'opacity:0.3'}">
-      <div class="emoji">${known?bd.emoji:'❓'}</div>
+      <div class="emoji">${spriteOrEmoji(bd, known, 52)}</div>
       <div class="name">${known?bd.name:'???'}</div>
       ${known?`<span class="elem-tag elem-${bd.element}">${bd.element}</span>
         <div class="dim" style="font-size:13px;">${bd.gens} × ${escapeHtml(bd.genName)}</div>`:''}
@@ -3209,7 +3365,7 @@ function renderRoster(){
     return `
     <div class="mcard ${sel?'selected':''}" onclick="toggleFuseSelect('${m.uid}')">
       ${m.tier>=3?'<div class="tier3tag">👑</div>':(m.tier>=2?'<div class="tier2tag">★</div>':'')}${isHybridId(m.speciesId)?'<div class="tier2tag" style="left:2px; right:auto; color:var(--wind)">✦</div>':''}
-      <div class="emoji">${st.emoji}</div>
+      <div class="emoji">${unitSpriteHtml(st, 40)}</div>
       <div class="name">${st.name}</div>
       <div class="lvl">Lv.${m.level}</div>
       ${elemTags(st.elements)}
@@ -3261,7 +3417,7 @@ function hybridIndexHtml(){
     const sd = HYBRID_SPECIES[id];
     const known = state.discovered && state.discovered[id];
     return `<div class="mcard" style="width:96px; cursor:default; ${known?'':'opacity:0.35'}">
-      <div class="emoji">${known?sd.emoji:'❓'}</div>
+      <div class="emoji">${spriteOrEmoji(sd, known, 38)}</div>
       <div class="name">${known?sd.name:'???'}</div>
       ${elemTags(sd.elements)}
     </div>`;
@@ -3341,7 +3497,7 @@ function renderSalvage(){
       if(bits.length) action = `<div style="margin-top:4px;">${bits.join(' ')}</div>`;
     }
     return `<div class="mcard ${isDonor?'selected':''}" style="width:130px; cursor:default;">
-      <div class="emoji">${st.emoji}</div>
+      <div class="emoji">${unitSpriteHtml(st, 44)}</div>
       <div class="name">${st.name}</div>
       <div class="lvl">Lv.${m.level}</div>
       ${elemTags(st.elements)}
@@ -3523,7 +3679,7 @@ function renderFormation(){
     if(!m) return `<div class="slot" onclick="placeSelected('${row}',${idx})">+</div>`;
     const st = computeStats(m);
     return `<div class="slot filled" onclick="clearSlot('${row}',${idx})">
-      <div>${st.emoji}</div><div class="slvl">Lv${m.level}</div>
+      <div>${unitSpriteHtml(st, 36)}</div><div class="slvl">Lv${m.level}</div>
     </div>`;
   }
   const placedUids = state.formation.front.concat(state.formation.back).filter(Boolean);
@@ -3532,7 +3688,7 @@ function renderFormation(){
     const st = computeStats(m);
     const sel = state.formSelected===m.uid;
     return `<div class="mcard ${sel?'selected':''}" onclick="selectBenchMonster('${m.uid}')">
-      <div class="emoji">${st.emoji}</div>
+      <div class="emoji">${unitSpriteHtml(st, 40)}</div>
       <div class="name">${st.name}</div>
       <div class="lvl">Lv.${m.level}</div>
       ${elemTags(st.elements)}
@@ -3702,7 +3858,7 @@ function buildPlayerUnits(terrain){
       const tier = corrTier(st.corruption);
       const unit = Object.assign(baseUnitDefaults(), {
         id:'p_'+m.uid, side:'player', row, monsterUid:m.uid, level:m.level,
-        name:st.name, emoji:st.emoji, element:st.element, elements:st.elements.slice(),
+        name:st.name, emoji:st.emoji, sprite:st.sprite, element:st.element, elements:st.elements.slice(),
         attackElements:st.innate.slice(), hybrid:st.hybrid, skillName:st.skill,
         bHp:st.hp, bAtk:st.atk, bDef:st.def, bSpd:st.spd,
         maxHp:st.hp, hp:st.hp, atk:st.atk, def:st.def, spd:st.spd,
@@ -3785,7 +3941,7 @@ function buildEnemyUnits(stage, terrain, adapted, usePlating, platingElem){
     const hp = Math.round(sd.base.hp*mult);
     const unit = Object.assign(baseUnitDefaults(), {
       id:'e_'+i+'_'+id, side:'enemy', row, speciesKey:id,
-      name:sd.name, emoji:sd.emoji, element:sd.element, elements:[sd.element], attackElements:[sd.element], skillName:sd.skill,
+      name:sd.name, emoji:sd.emoji, sprite:sd.sprite, element:sd.element, elements:[sd.element], attackElements:[sd.element], skillName:sd.skill,
       bHp:hp, bAtk:Math.round(sd.base.atk*mult), bDef:Math.round(sd.base.def*mult), bSpd:Math.round(sd.base.spd*mult),
       maxHp:hp, hp:hp,
       atk:Math.round(sd.base.atk*mult), def:Math.round(sd.base.def*mult), spd:Math.round(sd.base.spd*mult),
@@ -3814,7 +3970,7 @@ function buildBossUnits(stage, terrain, adapted, usePlating, boss, platingElem){
     const hp = Math.round(REF.hp*mult*0.55);
     const g = Object.assign(baseUnitDefaults(), {
       id:'e_gen'+i, side:'enemy', row:'front', speciesKey:null, isGenerator:true,
-      name:boss.genName, emoji:boss.genEmoji, element:boss.genElement, elements:[boss.genElement],
+      name:boss.genName, emoji:boss.genEmoji, sprite:boss.genSprite||GEN_SPRITE, element:boss.genElement, elements:[boss.genElement],
       attackElements:[boss.genElement], skillName:'Overcharge',
       bHp:hp, bAtk:Math.round(REF.atk*mult*0.7), bDef:Math.round(REF.def*mult*1.1), bSpd:Math.round(REF.spd*mult*0.9),
       maxHp:hp, hp:hp, atk:Math.round(REF.atk*mult*0.7), def:Math.round(REF.def*mult*1.1), spd:Math.round(REF.spd*mult*0.9),
@@ -3830,7 +3986,7 @@ function buildBossUnits(stage, terrain, adapted, usePlating, boss, platingElem){
   const hp = Math.round(REF.hp*mult*boss.mult.hp);
   const b = Object.assign(baseUnitDefaults(), {
     id:'e_boss', side:'enemy', row:'back', speciesKey:null, isBoss:true, shielded:boss.gens>0,
-    name:boss.name, emoji:boss.emoji, element:boss.element, elements:[boss.element],
+    name:boss.name, emoji:boss.emoji, sprite:boss.sprite, element:boss.element, elements:[boss.element],
     attackElements:[boss.element], skillName:boss.skill,
     bHp:hp, bAtk:Math.round(REF.atk*mult*boss.mult.atk), bDef:Math.round(REF.def*mult*boss.mult.def), bSpd:Math.round(REF.spd*mult*boss.mult.spd),
     maxHp:hp, hp:hp,
@@ -3872,7 +4028,7 @@ function buildDuelUnits(snapshot, terrain){
     const tier = corrTier(st.corruption);
     const unit = Object.assign(baseUnitDefaults(), {
       id:'e_duel'+i, side:'enemy', row:(u.row==='back'?'back':'front'), speciesKey:null,
-      name:st.name, emoji:st.emoji, element:st.element, elements:st.elements.slice(),
+      name:st.name, emoji:st.emoji, sprite:st.sprite, element:st.element, elements:st.elements.slice(),
       attackElements:st.innate.slice(), hybrid:st.hybrid, skillName:st.skill,
       bHp:st.hp, bAtk:st.atk, bDef:st.def, bSpd:st.spd,
       maxHp:st.hp, hp:st.hp, atk:st.atk, def:st.def, spd:st.spd,
@@ -3899,7 +4055,7 @@ function buildTutorialEnemies(terrain){
     const hp = Math.round(sd.base.hp*0.75);
     const u = Object.assign(baseUnitDefaults(), {
       id:'e_tut'+i, side:'enemy', row:'front', speciesKey:id,
-      name:sd.name, emoji:sd.emoji, element:sd.element, elements:[sd.element],
+      name:sd.name, emoji:sd.emoji, sprite:sd.sprite, element:sd.element, elements:[sd.element],
       attackElements:[sd.element], skillName:sd.skill,
       bHp:hp, bAtk:Math.round(sd.base.atk*0.55), bDef:Math.round(sd.base.def*0.7), bSpd:Math.round(sd.base.spd*0.6),
       maxHp:hp, hp:hp, atk:Math.round(sd.base.atk*0.55), def:Math.round(sd.base.def*0.7), spd:Math.round(sd.base.spd*0.6),
@@ -4965,8 +5121,8 @@ function victoryPortrait(result){
   const element = mvp ? mvp.element : 'volt';
   const label = isDeep(state.stage) ? `Depth ${deepDepth(state.stage)}` : `Stage ${state.stage}`;
   return {
-    element, mvpName: mvp ? mvp.name : null, mvpEmoji: mvp ? mvp.emoji : '⚔',
-    label, bossName: bossDef ? bossDef.name : null, bossEmoji: bossDef ? bossDef.emoji : null,
+    element, mvpName: mvp ? mvp.name : null, mvpEmoji: mvp ? mvp.emoji : '⚔', mvpSprite: mvp ? mvp.sprite : null,
+    label, bossName: bossDef ? bossDef.name : null, bossEmoji: bossDef ? bossDef.emoji : null, bossSprite: bossDef ? bossDef.sprite : null,
     finale, warlord: !!(bossDef && bossDef.isWarlord), faction: (bossDef && bossDef.faction) || null,
   };
 }
@@ -4974,11 +5130,13 @@ function renderVictoryPortrait(p){
   if(!p) return '';
   const glow = 'var(--'+p.element+')';
   const title = p.finale ? 'THE GATE FALLS' : (p.bossName || 'VICTORY');
+  const heroSprite = p.bossSprite || p.mvpSprite;
+  const heroEmoji = p.bossEmoji || p.mvpEmoji;
   return `
   <div class="panel" style="text-align:center; overflow:hidden; position:relative;
        background:radial-gradient(circle at 50% 30%, ${glow}22, var(--bg2) 70%);">
     <div style="font-size:11px; letter-spacing:2px; color:${glow};">${p.warlord ? (p.faction||'WARLORD').toUpperCase() : (p.finale?'CAMPAIGN COMPLETE':'COMMANDER DOWN')}</div>
-    <div style="font-size:54px; margin:10px 0; filter:drop-shadow(0 0 14px ${glow});">${p.bossEmoji || p.mvpEmoji}</div>
+    <div style="margin:10px 0; display:flex; justify-content:center;">${heroSprite ? spriteSvg(heroSprite, p.element, 72) : `<span style="font-size:54px; filter:drop-shadow(0 0 14px ${glow});">${heroEmoji}</span>`}</div>
     <h2 class="section" style="border:none; justify-content:center;">${escapeHtml(title)}</h2>
     <div class="dim" style="font-size:15px;">${escapeHtml(p.label)}</div>
     ${p.mvpName ? `<div style="margin-top:8px; font-size:16px;">${p.mvpEmoji} <b style="color:${glow};">${escapeHtml(p.mvpName)}</b> carried the fight</div>` : ''}
@@ -5008,7 +5166,7 @@ function renderUnit(u, activeId, validTargetIds){
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
     ${u.trait&&!u.corruption?`<div class="rust-tag" style="color:var(--volt)" title="${traitName(u.trait)}: ${traitDesc(u.trait)}">${TRAITS[u.trait.key].emoji}</div>`:''}
-    <div class="emoji">${u.emoji}</div>
+    <div class="emoji">${unitSpriteHtml(u, u.isBoss?48:36)}</div>
     <div class="uname">${u.name}${u.mentorRookie?` <span title="Mentor Bond: paired with a veteran — earning bonus EXP this fight">🌱</span>`:''}${u.mentorVeteran?` <span title="Mentor Bond: mentoring a rookie — fighting sharper for it">🎓</span>`:''}</div>
     <div class="hpbar-bg"><div class="hpbar-fill ${(!jammed&&pct<30)?'low':''}" style="width:${pct}%; ${jammed?'background:repeating-linear-gradient(90deg,var(--dim) 0 4px,#000 4px 8px);':''}"></div></div>
     <div class="cd-tag">${u.fainted?'DOWN':(u.skillCd>0?'skill:'+u.skillCd:'skill ready')}</div>

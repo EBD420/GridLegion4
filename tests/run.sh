@@ -59,6 +59,7 @@ run codex-bonuses      dom-storage-server.js "$H/assert.js" "$S/21-codex-bonuses
 run legion-rebirth     dom-storage-server.js "$H/assert.js" "$S/22-legion-rebirth.js"
 run the-forge          dom-storage-server.js "$H/assert.js" "$S/23-the-forge.js"
 run raid-mutators      dom-storage-server.js "$H/assert.js" "$S/24-raid-mutators.js"
+run sprites            dom-storage-server.js "$H/assert.js" "$S/25-sprites.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

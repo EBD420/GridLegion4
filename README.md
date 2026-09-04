@@ -87,6 +87,15 @@ pool — enraged past half health, warded against one element, a bonus-salvage
 attempt — seeded off that boss's own row so every guild member sees the identical
 loadout with no extra setup, and it reshuffles the moment a new boss is summoned.
 
+**Procedural sprites.** Every monster, chassis, hybrid, commander and warlord — all
+40 of them — now draws as a small vector creature instead of an emoji: a body shape
+(organic / mech / disc / core) plus a handful of accents (ears, horns, wings, a tail,
+spikes, an antenna...), colored live from the same six-element palette used
+everywhere else, so a two-element hybrid genuinely shows both parent colors on one
+body. Nothing is a static image — every sprite is built from a short recipe and drawn
+as inline SVG the instant it's needed, in battle, on a roster card, in the bestiary,
+and on a boss's Victory Portrait.
+
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
 council vote, a shared raid boss, and an asynchronous PvP ladder. All of it is off
 until configured, and the single-player game never depends on it.
@@ -110,7 +119,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-1263 assertions, no dependencies beyond `node`. The suites extract the script out of
+1371 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

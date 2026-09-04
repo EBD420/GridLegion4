@@ -142,7 +142,7 @@ ok('journal carries the portrait before saving', !!state.journal[0].portrait);
 const revived = reviveJournal(JSON.parse(JSON.stringify(state.journal)));
 ok('a clean portrait survives the revive', revived[0].portrait && revived[0].portrait.bossName==='Warlord Ashclaw', revived[0].portrait);
 ok('unknown fields are stripped, not carried through', Object.keys(revived[0].portrait).sort().join(',') ===
-   ['bossEmoji','bossName','element','faction','finale','label','mvpEmoji','mvpName','warlord'].sort().join(','));
+   ['bossEmoji','bossName','bossSprite','element','faction','finale','label','mvpEmoji','mvpName','mvpSprite','warlord'].sort().join(','));
 const badJournal = [{ id:'j1', stage:7, win:true, text:'test entry', at:Date.now(), portrait:{ element:'not-a-real-element', label:'x' } }];
 ok('a portrait with a bogus element is dropped, entry kept', reviveJournal(badJournal)[0].portrait===null);
 const noLabel = [{ id:'j2', stage:7, win:true, text:'test entry', at:Date.now(), portrait:{ element:'fire' } }];
