@@ -107,6 +107,53 @@ now and who's up next, reading straight off the same queue the engine already ru
 on. All of it respects a reduced-motion preference the same way the existing hit
 flashes and screen shake already did.
 
+**Battle-Forged Bonds.** Two monsters that keep fighting side by side — deployed
+together, both still standing when a fight is won, enough times running — quietly
+earn a small ATK/DEF edge whenever they're fielded together after that. Tracked by
+species pair rather than the individual monster, so it survives either one evolving
+into a Prime or an Ascended form and only ever really breaks if one splices into a
+hybrid. No progress bar, no counter — just a small badge once a bond actually goes
+live, same restraint as the existing Mentor Bond icons. A different axis from Mentor
+Bonds: that one rewards a level gap, this one rewards history.
+
+**Rustbound Aces.** A rare, named elite can turn up embedded in an otherwise ordinary
+wave — visibly tougher than its squadmates, but not a shielded commander fight. Kill
+one and it's guaranteed to leave behind its own part, cosmetically marked as
+Ace-Marked and installed, purged and banner-worn exactly like any other salvage.
+
+**Split-Phase bosses.** The Deep now cycles a second kind of milestone alongside the
+Foundry Core: a Fracture Engine, with two independently targetable, independently
+elemented halves — an armored Anchor Core and a fast, burning Cleaver Rig — live from
+the first turn, no shield or pylons at all. Which one you focus first is the entire
+fight.
+
+**Rustbound Doctrine.** The Rustbound Intel banner already reads the last few fights;
+Doctrine is the same idea stretched across the whole save file instead of the last five
+wins. It quietly tallies which element you've actually leaned on, which row carries the
+formation, and which monster has racked up the most kills — for as long as this legion
+has existed, Rebirth included, the same way Battle-Forged Bonds already survive it. Once
+there's enough history to draw a real conclusion, the enemy roster permanently skews a
+little harder toward whatever counters your lifetime-favourite element, on top of (and
+independent from) Intel's own short-term read, and the War Journal writes a line when
+the case file actually escalates. A save with real history behind it fights a subtly
+different, slower war than a fresh one at the same stage.
+
+**Rustbound Archive.** Deep-only, rare, and not a checklist: winning a fight down there
+has a small chance to turn up a fragment of ambiguous Rustbound origin lore instead of
+loot. Twelve fragments exist, three apiece behind four unproven theories, and which ones
+a given legion happens to find decides which theory (if any) reads as "leading" for that
+save — two players can walk away with genuinely different beliefs about what the
+Rustbound actually are. Survives Rebirth, same as everything else that counts as
+knowledge rather than gear.
+
+**The Depth Chart.** War Journal tells the story of a run in prose; this shows its
+shape at a glance instead. A generated vertical timeline plots every milestone this
+legion has ever cleared at its real depth — Foundry Core, a named Warlord, the Fracture
+Engine, an elite wave — with a live "you are here" marker on the depth currently being
+fought. It draws straight off the same `cleared`/`bestDepth` history the Bestiary and
+Rebirth already keep, so it needed no new save data of its own, and like the Archive and
+Doctrine, nothing on it resets when the legion is reborn.
+
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
 council vote, a shared raid boss, and an asynchronous PvP ladder. All of it is off
 until configured, and the single-player game never depends on it.
@@ -130,7 +177,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-1408 assertions, no dependencies beyond `node`. The suites extract the script out of
+1684 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.
