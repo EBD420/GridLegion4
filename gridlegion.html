@@ -123,10 +123,23 @@
   .slot .slvl{ font-size:12px; color:var(--gold); }
   .synergy-tag{ font-size:12px; color:var(--gold); margin-left:64px; margin-top:-4px; margin-bottom:2px; text-shadow:0 0 4px rgba(255,178,56,0.4); }
 
-  .battlefield{ display:flex; flex-direction:column; gap:10px; }
+  /* A positioned battlefield: two facing lanes (player left, enemy right)
+     either side of a center divider. Within a side the FRONT formation row
+     sits nearest the divider (where the clash actually happens) and the
+     BACK row sits further out — real left/right coordinates so an attack
+     can lunge toward the opposing side and a hit can knock back away from
+     it, instead of everyone just sitting in one generic stacked block. */
+  .battlefield{ display:flex; align-items:flex-start; justify-content:center; gap:0; }
+  .bf-side{ display:flex; flex-direction:column; flex:1; min-width:0; }
+  .bf-side-head{ font-size:14px; color:var(--dim); text-align:center; margin-bottom:6px; }
+  .bf-cols{ display:flex; flex-direction:row; gap:8px; flex-wrap:wrap; }
+  .bf-side.player .bf-cols{ justify-content:flex-end; }
+  .bf-side.enemy .bf-cols{ justify-content:flex-start; }
+  .bf-divider{ align-self:stretch; width:2px; margin:0 12px; flex:none;
+    background:repeating-linear-gradient(to bottom, var(--border) 0 6px, transparent 6px 13px); }
   .side-label{ font-size:14px; color:var(--dim); text-align:center; margin:2px 0; }
   .rowsyn{ font-size:12px; color:var(--gold); text-align:center; min-height:14px; }
-  .unit-row{ display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+  .unit-row{ display:flex; flex-direction:column; gap:6px; align-items:center; }
   .unit{
     width: 86px; background: var(--bg2); border:1px solid var(--border); padding:6px 4px; text-align:center; position:relative;
   }
@@ -134,7 +147,44 @@
   .unit.active{ border-color: var(--gold); box-shadow:0 0 0 2px var(--gold) inset; }
   .unit.targetable{ border-color: var(--danger); cursor:pointer; box-shadow: 0 0 8px rgba(255,51,102,0.3); }
   .unit.allytarget{ border-color: var(--water); cursor:pointer; box-shadow: 0 0 8px rgba(47,217,255,0.3); }
-  .unit .emoji{ font-size:26px; }
+  /* The sprite lives in its own inner wrapper so a one-shot attack
+     lunge/knockback (JS-driven, added post-render like flash-hit below)
+     never fights the sprite's own always-on idle bob for the `animation`
+     shorthand — they're different elements, so both run at once instead of
+     one silently overwriting the other. */
+  .unit-motion{ display:inline-block; }
+  .unit .emoji{ font-size:26px; animation: idlebob 2.6s ease-in-out infinite; }
+  .unit.fainted .emoji{ animation:none; }
+  @keyframes idlebob{ 0%,100%{ transform:translateY(0); } 50%{ transform:translateY(-3px); } }
+  @keyframes lungeR{ 0%,100%{ transform:translateX(0); } 45%{ transform:translateX(16px); } }
+  @keyframes lungeL{ 0%,100%{ transform:translateX(0); } 45%{ transform:translateX(-16px); } }
+  @keyframes knockR{ 0%,100%{ transform:translateX(0); } 35%{ transform:translateX(10px); } }
+  @keyframes knockL{ 0%,100%{ transform:translateX(0); } 35%{ transform:translateX(-10px); } }
+  .unit-motion.lunge-right{ animation: lungeR 0.34s ease-out 1; }
+  .unit-motion.lunge-left{ animation: lungeL 0.34s ease-out 1; }
+  .unit-motion.knock-right{ animation: knockR 0.3s ease-out 1; }
+  .unit-motion.knock-left{ animation: knockL 0.3s ease-out 1; }
+  /* Element-themed hit particles — a short burst spawned in the #fx overlay
+     at the moment of a real (non-blocked, non-missed) hit, one shape+color
+     per element so a strike actually reads as fire/water/nature/... */
+  .particle{ position:absolute; width:8px; height:8px; pointer-events:none; animation: particleburst 0.55s ease-out forwards; }
+  @keyframes particleburst{ 0%{ opacity:1; transform:translate(0,0) scale(1); } 100%{ opacity:0; transform:translate(var(--tx),var(--ty)) scale(0.5); } }
+  .particle-fire{ background:var(--fire); border-radius:50%; box-shadow:0 0 6px var(--fire); }
+  .particle-water{ background:var(--water); border-radius:50% 50% 50% 0; transform:rotate(45deg); }
+  .particle-nature{ background:var(--nature); border-radius:0 100% 0 100%; }
+  .particle-earth{ width:7px; height:7px; background:var(--earth); clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%); }
+  .particle-volt{ width:3px; height:13px; background:var(--volt); box-shadow:0 0 6px var(--volt); }
+  .particle-wind{ width:15px; height:3px; border-radius:2px; background:var(--wind); opacity:0.85; }
+  /* Turn-order timeline — a live strip of who acts next, reflecting
+     b.queue/b.qIndex, updated on every battle render. */
+  .turnline{ display:flex; gap:6px; align-items:center; overflow-x:auto; padding:6px 2px; margin-bottom:10px; }
+  .turnline-label{ font-size:11px; color:var(--dim); letter-spacing:1px; margin-right:2px; flex:none; }
+  .turn-chip{ flex:none; width:34px; height:34px; border:1px solid var(--border); background:var(--bg2); display:flex; align-items:center; justify-content:center; position:relative; }
+  .turn-chip.enemy{ border-color: rgba(255,51,102,0.4); }
+  .turn-chip.player{ border-color: rgba(47,217,255,0.4); }
+  .turn-chip.now{ border-color:var(--gold); box-shadow:0 0 8px rgba(255,178,56,0.5); }
+  .turn-chip svg{ width:22px !important; height:22px !important; }
+  .turn-chip-arrow{ flex:none; color:var(--dim); font-size:13px; }
   .unit .uname{ font-size:12px; height:28px; overflow:hidden; }
   .hpbar-bg{ height:8px; background:#050709; border:1px solid var(--border); margin-top:3px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.7); }
   .hpbar-fill{ height:100%; background: var(--nature); box-shadow: 0 0 6px var(--nature); }
@@ -186,7 +236,8 @@
   .hpbar-fill{ transition: width 0.35s ease-out; }
   .audio-btn{ font-size:16px; padding:4px 8px; }
   @media (prefers-reduced-motion: reduce){
-    .floater, .unit.flash-hit, .unit.flash-heal, #app.shake, #app.shake-hard, .unit.active{ animation:none !important; }
+    .floater, .unit.flash-hit, .unit.flash-heal, #app.shake, #app.shake-hard, .unit.active,
+    .unit .emoji, .unit-motion, .particle{ animation:none !important; }
     .hpbar-fill{ transition:none; }
   }
   .membercard{ background:var(--bg2); border:1px solid var(--border); padding:10px; width:190px; }
@@ -2082,6 +2133,77 @@ function shake(strong){
   }catch(e){}
 }
 
+/* ================= BATTLE MOTION =================
+   Same queue-during-resolution / flush-after-render pattern as fx() above,
+   for two more things a hit needs: the attacker lunging toward its target
+   and the target flinching back, plus a short burst of element-colored
+   particles on a real hit. Queued from applyDamage() (and the Alpha Strike
+   ultimate, which resolves damage outside applyDamage), flushed once per
+   battle render right after flushFx(). Motion lands on a unit's inner
+   `.unit-motion` wrapper rather than the `.unit` card itself specifically
+   so it never collides with the card's own always-on `.active` pulse or
+   the sprite's always-on idle bob — different elements, so the `animation`
+   shorthand on each never has to fight over which value wins. */
+const fxMotionQueue = [];
+function fxMotion(attacker, defender, elem, hit){
+  if(!attacker || !defender) return;
+  fxMotionQueue.push({
+    attackerId: attacker.id, attackerSide: attacker.side,
+    defenderId: defender.id, defenderSide: defender.side,
+    elem: elem || null, hit: !!hit,
+  });
+}
+function towardCenter(side){ return side==='player' ? 'lunge-right' : 'lunge-left'; }
+function awayFromCenter(side){ return side==='player' ? 'knock-left' : 'knock-right'; }
+const PARTICLE_ELEMS = ['fire','water','nature','earth','volt','wind'];
+function spawnParticles(host, elem){
+  if(!domReady()) return;
+  const layer = document.getElementById('fx');
+  if(!layer) return;
+  const kind = PARTICLE_ELEMS.indexOf(elem)>=0 ? elem : 'earth';
+  try{
+    const r = host.getBoundingClientRect();
+    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+    const n = 6;
+    for(let i=0;i<n;i++){
+      const ang = (Math.PI*2*i/n) + (Math.random()-0.5)*0.6;
+      const dist = 20 + Math.random()*18;
+      const el = document.createElement('div');
+      el.className = 'particle particle-' + kind;
+      el.style.left = cx + 'px'; el.style.top = cy + 'px';
+      el.style.setProperty('--tx', Math.round(Math.cos(ang)*dist) + 'px');
+      el.style.setProperty('--ty', Math.round(Math.sin(ang)*dist) + 'px');
+      layer.appendChild(el);
+      setTimeout(()=>{ if(el.parentNode) el.parentNode.removeChild(el); }, 600);
+    }
+  }catch(e){}
+}
+function flushMotion(){
+  if(!domReady()) { fxMotionQueue.length = 0; return; }
+  const items = fxMotionQueue.splice(0);
+  items.forEach(it=>{
+    try{
+      const aUnit = document.querySelector('[data-unit="' + it.attackerId + '"]');
+      const aHost = aUnit ? aUnit.querySelector('.unit-motion') : null;
+      if(aHost){
+        const cls = towardCenter(it.attackerSide);
+        aHost.classList.add(cls);
+        setTimeout(()=>{ try{ aHost.classList.remove('lunge-right','lunge-left'); }catch(e){} }, 340);
+      }
+      if(it.hit){
+        const dUnit = document.querySelector('[data-unit="' + it.defenderId + '"]');
+        const dHost = dUnit ? dUnit.querySelector('.unit-motion') : null;
+        if(dHost){
+          const cls = awayFromCenter(it.defenderSide);
+          dHost.classList.add(cls);
+          setTimeout(()=>{ try{ dHost.classList.remove('knock-right','knock-left'); }catch(e){} }, 300);
+        }
+        if(dUnit) spawnParticles(dUnit, it.elem);
+      }
+    }catch(e){}
+  });
+}
+
 /* ================= BESTIARY =================
    Fills in as you meet things. Doubles as the reference the game needs now that
    it has this many systems.
@@ -2394,7 +2516,7 @@ function render(){
   else if(state.screen==='formation') app.innerHTML = renderFormation();
   else if(state.screen==='salvage') app.innerHTML = renderSalvage();
   else if(state.screen==='forge') app.innerHTML = renderForge();
-  else if(state.screen==='battle'){ app.innerHTML = renderBattle(); flushFx(); }
+  else if(state.screen==='battle'){ app.innerHTML = renderBattle(); flushFx(); flushMotion(); }
   else if(state.screen==='result') app.innerHTML = renderResult();
 }
 
@@ -4325,11 +4447,13 @@ function applyDamage(attacker, defender, isSkill){
   if(attacker.missChance && Math.random()<attacker.missChance){
     logMsg(`🌫️ ${attacker.emoji} ${attacker.name}'s attack is swallowed by the storm and misses!`);
     sfx('miss'); fx(defender.id, 'MISS', 'miss');
+    fxMotion(attacker, defender, null, false);
     return;
   }
   if(defender.dodge && Math.random()<defender.dodge){
     logMsg(`💨 ${defender.emoji} ${defender.name} dodges the attack!`);
     sfx('miss'); fx(defender.id, 'DODGE', 'miss');
+    fxMotion(attacker, defender, null, false);
     return;
   }
   const {dmg, crit, plated, strikeElem} = computeDamage(attacker, defender, isSkill);
@@ -4339,6 +4463,7 @@ function applyDamage(attacker, defender, isSkill){
   else if(defender.firstHitReduction && !defender.firstHitUsed){ defender.firstHitUsed=true; finalDmg=Math.round(finalDmg*0.5); note += ' (tide ward halves the blow)'; }
   defender.hp = Math.max(0, defender.hp-finalDmg);
   if(defender.hp<=0) defender.fainted = true;
+  fxMotion(attacker, defender, strikeElem, finalDmg>0);
   if(finalDmg > 0){
     fx(defender.id, '-' + finalDmg + (crit ? '!' : ''), crit ? 'crit' : (defender.side==='player' ? 'hurt' : 'dmg'));
     sfx(crit ? 'crit' : (isSkill ? 'skill' : 'hit'));
@@ -4732,6 +4857,8 @@ function playerTarget(targetId){
     if(target.hp<=0) target.fainted = true;
     b.elemDamage[am.elem] = (b.elemDamage[am.elem]||0) + finalBig;
     logMsg(`${target.emoji} ${target.name} takes ${finalBig} damage!${target.fainted?' — defeated!':''}`);
+    fx(target.id, '-' + finalBig + '!', 'crit');
+    fxMotion(unit, target, am.elem, finalBig>0);
     b.pendingAction = null; b.qIndex++;
     render();
     if(checkBattleEnd()) return;
@@ -5153,6 +5280,18 @@ function statusIconLine(u){
   if(u.taunt>0) icons.push('👊'+u.taunt);
   return icons.join(' ');
 }
+/* A live strip of who acts next this round, reflecting b.queue/b.qIndex
+   directly — the currently active unit is always its first chip. */
+function renderTurnTimeline(b, activeUnit){
+  const upcoming = b.queue.slice(b.qIndex).filter(u=>!u.fainted).slice(0, 8);
+  if(!upcoming.length) return '';
+  const chips = upcoming.map((u,i)=>{
+    const now = activeUnit && u.id===activeUnit.id && i===0;
+    const sprite = unitSpriteHtml(u, 22);
+    return `<div class="turn-chip ${u.side} ${now?'now':''}" title="${escapeHtml(u.name)}${u.isBoss?' (boss)':''}">${sprite||u.emoji}</div>`;
+  }).join('<span class="turn-chip-arrow">›</span>');
+  return `<div class="turnline"><span class="turnline-label">NEXT</span>${chips}</div>`;
+}
 function renderUnit(u, activeId, validTargetIds){
   const jammed = hasMod('blackout') && u.side==='enemy' && !u.fainted;
   const pct = jammed ? 100 : Math.max(0, Math.round((u.hp/u.maxHp)*100));
@@ -5166,7 +5305,7 @@ function renderUnit(u, activeId, validTargetIds){
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
     ${u.trait&&!u.corruption?`<div class="rust-tag" style="color:var(--volt)" title="${traitName(u.trait)}: ${traitDesc(u.trait)}">${TRAITS[u.trait.key].emoji}</div>`:''}
-    <div class="emoji">${unitSpriteHtml(u, u.isBoss?48:36)}</div>
+    <div class="unit-motion"><div class="emoji" style="animation-delay:-${(seedRandom(u.id)(24)/10).toFixed(1)}s">${unitSpriteHtml(u, u.isBoss?48:36)}</div></div>
     <div class="uname">${u.name}${u.mentorRookie?` <span title="Mentor Bond: paired with a veteran — earning bonus EXP this fight">🌱</span>`:''}${u.mentorVeteran?` <span title="Mentor Bond: mentoring a rookie — fighting sharper for it">🎓</span>`:''}</div>
     <div class="hpbar-bg"><div class="hpbar-fill ${(!jammed&&pct<30)?'low':''}" style="width:${pct}%; ${jammed?'background:repeating-linear-gradient(90deg,var(--dim) 0 4px,#000 4px 8px);':''}"></div></div>
     <div class="cd-tag">${u.fainted?'DOWN':(u.skillCd>0?'skill:'+u.skillCd:'skill ready')}</div>
@@ -5193,17 +5332,33 @@ function renderBattle(){
     validTargetIds = getValidTargets(activeUnit).map(u=>u.id);
   }
 
-  const enemyRows = `
-    <div class="side-label">🤖 RUSTBOUND FORCES${b.plating?` <span style="color:var(--water)">▣ ${b.plating}-plated</span>`:''}</div>
-    <div class="unit-row">${b.enemyUnits.filter(u=>u.row==='back').map(u=>renderUnit(u, activeUnit?activeUnit.id:null, validTargetIds)).join('')}</div>
-    <div class="unit-row">${b.enemyUnits.filter(u=>u.row==='front').map(u=>renderUnit(u, activeUnit?activeUnit.id:null, validTargetIds)).join('')}</div>`;
+  /* Player on the left facing right, enemy on the right facing left — front
+     row of each side sits in the column nearest the center divider, back
+     row further out, so a lunge/knockback has a real "toward/away from the
+     opponent" direction to animate along (see fxMotion() / .bf-side CSS). */
+  const uHtml = (list)=>list.map(u=>renderUnit(u, activeUnit?activeUnit.id:null, validTargetIds)).join('');
+  const enemyFront = uHtml(b.enemyUnits.filter(u=>u.row==='front'));
+  const enemyBack  = uHtml(b.enemyUnits.filter(u=>u.row==='back'));
+  const playerFront = uHtml(b.playerUnits.filter(u=>u.row==='front'));
+  const playerBack  = uHtml(b.playerUnits.filter(u=>u.row==='back'));
 
-  const playerRows = `
-    <div class="unit-row">${b.playerUnits.filter(u=>u.row==='front').map(u=>renderUnit(u, activeUnit?activeUnit.id:null, validTargetIds)).join('')}</div>
-    <div class="rowsyn">${b.synLabels.front?'✨ FRONT '+b.synLabels.front:''}</div>
-    <div class="unit-row">${b.playerUnits.filter(u=>u.row==='back').map(u=>renderUnit(u, activeUnit?activeUnit.id:null, validTargetIds)).join('')}</div>
-    <div class="rowsyn">${b.synLabels.back?'✨ BACK '+b.synLabels.back:''}</div>
-    <div class="side-label">🛡 YOUR LEGION</div>`;
+  const enemySide = `
+    <div class="bf-side enemy">
+      <div class="bf-side-head">🤖 RUSTBOUND FORCES${b.plating?` <span style="color:var(--water)">▣ ${b.plating}-plated</span>`:''}</div>
+      <div class="bf-cols">
+        <div class="unit-row">${enemyFront}</div>
+        <div class="unit-row">${enemyBack}</div>
+      </div>
+    </div>`;
+
+  const playerSide = `
+    <div class="bf-side player">
+      <div class="bf-side-head">🛡 YOUR LEGION</div>
+      <div class="bf-cols">
+        <div class="unit-row">${playerBack}<div class="rowsyn">${b.synLabels.back?'✨ '+b.synLabels.back:''}</div></div>
+        <div class="unit-row">${playerFront}<div class="rowsyn">${b.synLabels.front?'✨ '+b.synLabels.front:''}</div></div>
+      </div>
+    </div>`;
 
   let actionHtml = '';
   if(isPlayerTurn){
@@ -5295,10 +5450,11 @@ function renderBattle(){
         <div class="gauge-tick" style="left:${GAUGE_COST.rally}%"></div>
       </div>
     </div>
+    ${renderTurnTimeline(b, activeUnit)}
     <div class="battlefield">
-      ${enemyRows}
-      <div style="border-top:2px dashed var(--border); margin:6px 0;"></div>
-      ${playerRows}
+      ${playerSide}
+      <div class="bf-divider"></div>
+      ${enemySide}
     </div>
   </div>
   <div class="panel">

@@ -197,9 +197,12 @@ startGame();
 b = setupFight([newMonster('emberling',10)], 5);
 let battleHtml;
 ok('renderBattle() does not throw with a live boss fight on screen', (()=>{ try{ battleHtml = renderBattle(); return true; }catch(e){ return false; } })());
-ok('every unit on the field rendered its own svg sprite',
-   (battleHtml.match(/<svg/g)||[]).length === b.playerUnits.length + b.enemyUnits.length,
-   (battleHtml.match(/<svg/g)||[]).length+' vs '+(b.playerUnits.length+b.enemyUnits.length));
+// Every unit card draws its own sprite, AND the turn-order timeline (added
+// in the battle-UI rework) draws a small preview sprite per upcoming actor.
+const timelineChips = Math.min(8, b.queue.slice(b.qIndex).filter(u=>!u.fainted).length);
+ok('every unit on the field, plus every timeline chip, rendered its own svg sprite',
+   (battleHtml.match(/<svg/g)||[]).length === b.playerUnits.length + b.enemyUnits.length + timelineChips,
+   (battleHtml.match(/<svg/g)||[]).length+' vs '+(b.playerUnits.length+b.enemyUnits.length+timelineChips));
 forceWin();
 
 startGame();

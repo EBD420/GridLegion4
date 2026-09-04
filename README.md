@@ -96,6 +96,17 @@ body. Nothing is a static image — every sprite is built from a short recipe an
 as inline SVG the instant it's needed, in battle, on a roster card, in the bestiary,
 and on a boss's Victory Portrait.
 
+**A live battlefield.** Battle moved off one generic stacked block onto two facing
+lanes — your legion on the left, the Rustbound on the right, front row of each
+nearest the center so there's a real "toward the enemy" direction. Every strike
+lunges the attacker in, knocks the defender back, and throws a short burst of
+element-colored particles (embers, a splash, a leaf, a rock chip, a spark, a gust)
+at the point of impact; idle sprites get a small ambient bob so the field never sits
+dead still between turns. A live turn-order strip above the field shows who's acting
+now and who's up next, reading straight off the same queue the engine already runs
+on. All of it respects a reduced-motion preference the same way the existing hit
+flashes and screen shake already did.
+
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
 council vote, a shared raid boss, and an asynchronous PvP ladder. All of it is off
 until configured, and the single-player game never depends on it.
@@ -119,7 +130,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-1371 assertions, no dependencies beyond `node`. The suites extract the script out of
+1408 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

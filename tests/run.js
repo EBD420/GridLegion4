@@ -59,6 +59,7 @@ const SUITES = [
   { label:'the-forge',         harness:'dom-storage-server.js', assert:true, files:['23-the-forge.js'] },
   { label:'raid-mutators',     harness:'dom-storage-server.js', assert:true, files:['24-raid-mutators.js'] },
   { label:'sprites',           harness:'dom-storage-server.js', assert:true, files:['25-sprites.js'] },
+  { label:'battle-ui',         harness:'dom-storage-server.js', assert:true, files:['26-battle-ui.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;
