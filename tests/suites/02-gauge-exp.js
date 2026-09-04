@@ -57,6 +57,12 @@ ok('a full bar buys three purges, not one', afterFirst===67 && B.gauge===34, aft
 
 console.log('\n[10] EXP on defeat');
 startGame();
+// Codex Set Bonuses (added later) gives +5% win EXP once every Rustbound
+// chassis is discovered. Two 5-enemy battles below draw enough random
+// species that they can occasionally complete that category by chance,
+// which would silently inflate the "full amount" assertion below — pin the
+// codex empty so this block tests the raw EXP formula, not that bonus.
+state.codex = { species:{}, enemies:{}, hybrids:{}, bosses:{}, terrains:{}, parts:{}, traits:{} };
 state.stage=6;
 const e1=newMonster('emberling',1), e2=newMonster('aqualing',1);
 state.roster=[e1,e2];
@@ -77,6 +83,10 @@ ok('stage does not advance on a loss', state.stage===6);
 state.stage=6;
 state.formation.front=[e1.uid,e2.uid,null];
 beginBattle(); B=state.battle;
+// re-pin: beginBattle() above just recorded this battle's own enemies into
+// the codex, which combined with battle 1's draws could coincidentally
+// complete the Rustbound Chassis category right as we measure raw EXP.
+state.codex.enemies = {};
 B.enemyUnits.forEach(u=>{u.hp=0;u.fainted=true;});
 B.elemDamage={fire:50};
 endBattle('win');

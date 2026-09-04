@@ -62,6 +62,31 @@ automatically: the rookie earns 50% bonus EXP, the veteran fights at +5% ATK. A 
 reason to rotate weaker monsters through your line instead of always running your
 strongest three.
 
+**Codex set bonuses.** Filling in an entire bestiary section — every tribe, every
+chassis, every hybrid, every commander and warlord, every battlefield, every salvage
+part, every trait — grants a small permanent passive the instant the last entry is
+recorded: an extra roster slot, bonus EXP, better salvage odds, a boss-fight ATK/DEF
+edge, a Legion Gauge head start, cheaper rust, or legion-wide SPD. The bestiary screen
+shows exactly what's locked and what's already paying off.
+
+**Legion Rebirth.** A voluntary prestige reset, once you've reached Stage 5: wipe this
+legion's roster, levels and current stage back to the start, on purpose, in exchange
+for a small permanent stat edge that stacks with every rebirth and a star mark on your
+banner. Everything collected — the bestiary, tribe favour, champions, cleared trials,
+the salvage bay, the War Journal — rides through untouched. Only the grind resets.
+Deliberately a different axis from Commander Rank, which accrues just from playing and
+never costs anything.
+
+**The Forge.** A sink for salvage that's outgrown its usefulness raw: feed 3 of the
+same part in and get back one named, upgraded part — a stronger version of the stat it
+already had, plus a second stat the raw part never carried. Forged parts install and
+purge exactly like any other.
+
+**Raid mutators.** Every raid boss your guild summons draws 1–2 modifiers from a small
+pool — enraged past half health, warded against one element, a bonus-salvage
+attempt — seeded off that boss's own row so every guild member sees the identical
+loadout with no extra setup, and it reshuffles the moment a new boss is summoned.
+
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
 council vote, a shared raid boss, and an asynchronous PvP ladder. All of it is off
 until configured, and the single-player game never depends on it.
@@ -85,7 +110,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-852 assertions, no dependencies beyond `node`. The suites extract the script out of
+1263 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

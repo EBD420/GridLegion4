@@ -277,6 +277,44 @@ const PARTS = {
 };
 const STAT_LABEL = { hp:'HP', atk:'ATK', def:'DEF', spd:'SPD' };
 
+/* ---- The Forge: burns 3 of the same raw part into one named, stronger
+       part carrying a second stat the raw part never had. Forged parts are
+       kept OUT of the PARTS table itself (so they never inflate the Salvage
+       bestiary category or become bannable emblem picks) — they're just a
+       raw key with a "_forged" suffix, resolved through partInfo() below at
+       every place that needs full part data. ---- */
+const FORGE_SUFFIX = '_forged';
+const FORGE_COST = 3;
+const FORGE_PCT_MULT = 1.2;
+const FORGE_CORRUPTION_MULT = 0.75;
+const FORGED_PARTS = {
+  scraphound: { name:'Reinforced Scrap Plating',   bonusStat:'hp',  bonusPct:0.08 },
+  sparkdrone: { name:'Overcharged Static Coil',    bonusStat:'atk', bonusPct:0.08 },
+  cinderjaw:  { name:'Superheated Napalm Jets',    bonusStat:'def', bonusPct:0.08 },
+  frostcoil:  { name:'Absolute Cryo Cell',         bonusStat:'spd', bonusPct:0.08 },
+  thornbot:   { name:'Bloomforged Rustvine Spool', bonusStat:'def', bonusPct:0.08 },
+  galekite:   { name:'Tempered Shear Rotor',       bonusStat:'atk', bonusPct:0.08 },
+};
+function isForgedKey(key){ return typeof key==='string' && key.length>FORGE_SUFFIX.length && key.slice(-FORGE_SUFFIX.length)===FORGE_SUFFIX; }
+function baseKeyOf(key){ return isForgedKey(key) ? key.slice(0, -FORGE_SUFFIX.length) : key; }
+/* Resolves a state.parts / monster.parts key (raw or forged) to full display
+   and stat data. Every PARTS[k] lookup that can see an equipped or
+   bay-stored key (as opposed to enumerating the 6 known types themselves)
+   goes through this instead. */
+function partInfo(key){
+  const base = PARTS[baseKeyOf(key)];
+  if(!base) return null;
+  if(!isForgedKey(key)) return base;
+  const fb = FORGED_PARTS[baseKeyOf(key)];
+  if(!fb) return base;
+  return {
+    name: fb.name, emoji: base.emoji, element: base.element, desc: base.desc,
+    stat: base.stat, pct: Math.round(base.pct*FORGE_PCT_MULT*100)/100,
+    corruption: Math.max(1, Math.round(base.corruption*FORGE_CORRUPTION_MULT)),
+    forged: true, bonusStat: fb.bonusStat, bonusPct: fb.bonusPct,
+  };
+}
+
 /* ---- Cross-species fusion: every element pair has a named hybrid ---- */
 const HYBRIDS = {
   'fire+water':   { name:'Steamling',    emoji:'♨️', skill:'Scald Burst' },
@@ -1087,6 +1125,58 @@ function myCouncilVote(){
   return row ? row.option : null;
 }
 
+/* ---- raid mutators ----
+   Every raid boss draws 1-2 modifiers from a small pool, seeded off that
+   boss's own server row id — so it's identical for every guild member
+   looking at the same boss, no schema change needed, and it reshuffles
+   naturally the moment the guild summons a new one (rather than on an
+   artificial calendar clock the raid system doesn't otherwise have). */
+const RAID_ENRAGE_BONUS = 0.20;
+const RAID_WARD_PENALTY = 0.30;
+const RAID_MUTATOR_POOL = [
+  { key:'enraged', name:'Enraged Past Half', emoji:'😡',
+    make:()=>({ desc:`Under 50% HP the boss fights back — every attempt logs ${Math.round(RAID_ENRAGE_BONUS*100)}% more raid damage once it's that low.` }) },
+  { key:'warded', name:'Elemental Ward', emoji:'🛡',
+    make:r=>{ const elem = TRIBE_IDS[r(TRIBE_IDS.length)];
+      return { elem, desc:`Warded against ${elem.toUpperCase()} — ${elem} damage counts for ${Math.round(RAID_WARD_PENALTY*100)}% less raid credit.` }; } },
+  { key:'salvage', name:'Salvage Surge', emoji:'⚙️',
+    make:()=>({ desc:'A raid win strips 2 salvage parts from the field, same haul as an elite wave.' }) },
+];
+function raidMutatorsFor(bossId){
+  if(!bossId) return [];
+  const r = seedRandom('raidmut:'+bossId);
+  const count = Math.min(RAID_MUTATOR_POOL.length, 1 + r(2));
+  const idx = [];
+  while(idx.length < count){
+    const i = r(RAID_MUTATOR_POOL.length);
+    if(idx.indexOf(i)<0) idx.push(i);
+  }
+  return idx.map(i=>{
+    const def = RAID_MUTATOR_POOL[i];
+    return Object.assign({ key:def.key, name:def.name, emoji:def.emoji }, def.make(r));
+  });
+}
+function currentRaidMutators(){ return (social.raid && social.raid.id) ? raidMutatorsFor(social.raid.id) : []; }
+function raidMutatorActive(key){ return currentRaidMutators().some(m=>m.key===key); }
+/* Applies Enraged / Elemental Ward to the raw damage total before it's sent
+   to the server. Elemental Ward needs the per-element breakdown the battle
+   already tracks in b.elemDamage; Enraged reads the boss's HP snapshot from
+   when the run began (social.raid), same eventual-consistency trust model
+   as the rest of the raid board. */
+function computeRaidDamage(b){
+  let dmg = b.totalDamage || 0;
+  const muts = currentRaidMutators();
+  const ward = muts.find(m=>m.key==='warded');
+  if(ward){
+    const wardedDealt = (b.elemDamage && b.elemDamage[ward.elem]) || 0;
+    dmg -= Math.round(wardedDealt * RAID_WARD_PENALTY);
+  }
+  if(muts.some(m=>m.key==='enraged') && social.raid && social.raid.max_hp>0 && (social.raid.hp/social.raid.max_hp)<=0.5){
+    dmg = Math.round(dmg * (1+RAID_ENRAGE_BONUS));
+  }
+  return Math.max(0, dmg);
+}
+
 /* ---- raid ---- */
 function raidFetch(){
   if(!social.guild) return Promise.resolve(null);
@@ -1203,6 +1293,7 @@ function serializeSave(){
     audio: { sfx: audio.sfx, music: audio.music },
     codex: state.codex,
     tactical: state.tactical,
+    rebirth: state.rebirth,
   };
 }
 function validateSave(d){
@@ -1225,7 +1316,7 @@ function reviveMonster(m){
     level: (typeof m.level==='number' && m.level>=1) ? Math.floor(m.level) : 1,
     exp: (typeof m.exp==='number' && m.exp>=0) ? m.exp : 0,
     tier,
-    parts: Array.isArray(m.parts) ? m.parts.filter(k=>PARTS[k]).slice(0, slotCap) : [],
+    parts: Array.isArray(m.parts) ? m.parts.filter(k=>!!partInfo(k)).slice(0, slotCap) : [],
     trait: (m.trait && TRAITS[m.trait.key]) ? m.trait : rollTrait(),
     grafts,
   };
@@ -1286,7 +1377,7 @@ function applySave(d, slot){
   state.stage = Math.max(1, Math.floor(d.stage));
   state.bestDepth = (typeof d.bestDepth==='number' && d.bestDepth>=0) ? Math.floor(d.bestDepth) : 0;
   state.roster = roster;
-  state.parts = Array.isArray(d.parts) ? d.parts.filter(p=>p && PARTS[p.key]).map(p=>({uid:p.uid||uid(), key:p.key})) : [];
+  state.parts = Array.isArray(d.parts) ? d.parts.filter(p=>p && !!partInfo(p.key)).map(p=>({uid:p.uid||uid(), key:p.key})) : [];
   state.intel = (d.intel && Array.isArray(d.intel.history))
     ? { history: d.intel.history.filter(e=>ELEM_BEATS[e]).slice(-5), wins: (typeof d.intel.wins==='number'?d.intel.wins:0) }
     : { history: [], wins: 0 };
@@ -1309,6 +1400,9 @@ function applySave(d, slot){
     });
   }
   state.tactical = d.tactical === true;
+  state.rebirth = (d.rebirth && typeof d.rebirth.count==='number' && d.rebirth.count>=0)
+    ? { count: Math.floor(d.rebirth.count) } : { count: 0 };
+  state.confirmRebirth = null;
   state.favor = {};
   if(d.favor && typeof d.favor==='object'){
     TRIBE_IDS.forEach(e=>{
@@ -1473,6 +1567,7 @@ let state = {
   harvest: null,
   transfer: null,
   bayMsg: '',
+  forgeMsg: '',
   codex: null,
   tactical: false,
   tutorial: null,
@@ -1492,6 +1587,8 @@ let state = {
   transfer: null,
   battle: null,
   lastResult: null,
+  rebirth: { count: 0 },
+  confirmRebirth: null,
 };
 
 function newMonster(speciesId, level=1, tier=1, trait){
@@ -1543,6 +1640,7 @@ function initGame(){
   state.harvest = null;
   state.transfer = null;
   state.bayMsg = '';
+  state.forgeMsg = '';
   state.tutorial = null;
   state.duel = null;
   state.raidRun = false;
@@ -1552,6 +1650,8 @@ function initGame(){
   state.confirmWipe = null;
   state.transfer = null;
   state.stage = 1;
+  state.rebirth = { count: 0 };
+  state.confirmRebirth = null;
 }
 
 function getSpeciesData(speciesId, tier){
@@ -1582,10 +1682,11 @@ function partSlots(m){
   return base + graftCount(m,'slot');
 }
 function monsterCorruption(m){
-  const ps = (m.parts||[]).map(k=>PARTS[k]).filter(Boolean);
+  const ps = (m.parts||[]).map(k=>partInfo(k)).filter(Boolean);
   if(ps.length===0) return 0;
   let c = ps.reduce((s,p)=>s+p.corruption,0) + (ps.length-1)*8;
   if(m.trait && m.trait.key==='scavenger') c = Math.max(0, c-10);
+  if(codexBonusActive('parts')) c = Math.max(0, c - ps.length*2);
   return c;
 }
 
@@ -1597,11 +1698,15 @@ function computeStats(monster){
   const innate = sd.elements ? sd.elements.slice() : [sd.element];
   const elements = innate.slice();
   (monster.parts||[]).forEach(k=>{
-    const p = PARTS[k]; if(!p) return;
+    const p = partInfo(k); if(!p) return;
     if(p.stat==='hp')  hp  = Math.round(hp *(1+p.pct));
     if(p.stat==='atk') atk = Math.round(atk*(1+p.pct));
     if(p.stat==='def') def = Math.round(def*(1+p.pct));
     if(p.stat==='spd') spd = Math.round(spd*(1+p.pct));
+    if(p.bonusStat==='hp')  hp  = Math.round(hp *(1+p.bonusPct));
+    if(p.bonusStat==='atk') atk = Math.round(atk*(1+p.bonusPct));
+    if(p.bonusStat==='def') def = Math.round(def*(1+p.bonusPct));
+    if(p.bonusStat==='spd') spd = Math.round(spd*(1+p.bonusPct));
     if(!elements.includes(p.element)) elements.push(p.element);
   });
   const g = graftsOf(monster);
@@ -1855,6 +1960,26 @@ function codexProgress(){
   return { seen, total, pct: total ? Math.round((seen/total)*100) : 0 };
 }
 
+/* ---- codex set bonuses ----
+   Filling in an entire bestiary category — every tribe, every chassis, every
+   splice — grants a small permanent passive on top of it, read live off the
+   codex rather than earned or toggled separately. Completing the section is
+   what unlocks it, so there's nothing here to lose on a wipe (the codex never
+   resets) and nothing to re-earn after one either. */
+const CODEX_BONUSES = {
+  species:  { name:'Field Naturalist',         box:'TRIBES OF TEXEL',   desc:'+1 roster slot cap' },
+  enemies:  { name:'Countermeasures Doctrine', box:'RUSTBOUND CHASSIS', desc:'+5% EXP from every victory' },
+  hybrids:  { name:'Splice Archive',           box:'SPLICED HYBRIDS',   desc:'+5% chance of salvage from a win' },
+  bosses:   { name:"Commander's Ledger",       box:'COMMANDERS',        desc:'+6% ATK and DEF for your whole legion in any commander or warlord fight' },
+  terrains: { name:'Terrain Mastery',          box:'BATTLEFIELDS',      desc:'Legion Gauge starts every battle with +10%' },
+  parts:    { name:'Salvage Efficiency',       box:'SALVAGE',           desc:'−2 rust from every equipped part' },
+  traits:   { name:'Trait Fluency',            box:'TRAITS',            desc:'+3% SPD for your whole legion' },
+};
+function codexBonusActive(cat){
+  const total = codexTotals()[cat];
+  return !!total && codexCount(cat) >= total;
+}
+
 /* ================= LEGION IDENTITY =================
    A name plus a banner assembled from salvage parts the player has actually
    unlocked (installed at least once). Purely cosmetic, but it's what other
@@ -1872,9 +1997,52 @@ function emblemGlyph(keys){
 function legionBanner(){
   const g = emblemGlyph(state.emblem);
   const name = (state.profileName||'Commander').trim() || 'Commander';
-  return g ? (g+' '+name) : name;
+  const base = g ? (g+' '+name) : name;
+  return base + rebirthMark();
 }
-function goLegionId(){ state.screen='legionid'; sfx('click'); render(); }
+function goLegionId(){ state.screen='legionid'; state.confirmRebirth=null; sfx('click'); render(); }
+
+/* ================= LEGION REBIRTH =================
+   A voluntary prestige reset, separate from Commander Rank: Commander Rank
+   accrues just from playing, on any legion, and never costs anything.
+   Rebirth is a deliberate choice with a real cost — it wipes THIS legion's
+   roster, levels and current stage back to the start — in exchange for a
+   small permanent stat multiplier and a cosmetic mark on the banner. Gated
+   behind reaching Stage 5 first, so there's always a genuine run behind it;
+   without that gate a fresh legion could rebirth for free the instant it's
+   created. Collection progress (codex, favour, champions, cleared trials,
+   the War Journal, salvage bay, banner) is untouched — only the roster
+   grind resets. */
+const REBIRTH_MIN_STAGE = 5;
+const REBIRTH_STAT_BONUS = 0.04;   // +4% ATK/DEF/HP/SPD per rebirth, stacking
+function rebirthCount(){ return (state.rebirth && state.rebirth.count) || 0; }
+function rebirthEligible(){ return state.stage >= REBIRTH_MIN_STAGE; }
+function rebirthMultiplier(){ return 1 + rebirthCount()*REBIRTH_STAT_BONUS; }
+function rebirthMark(){ const n = Math.min(5, rebirthCount()); return n>0 ? ' '+'★'.repeat(n) : ''; }
+function doRebirth(){
+  if(!rebirthEligible()) return;
+  if(!state.confirmRebirth){ state.confirmRebirth = true; render(); return; }
+  state.confirmRebirth = false;
+  const fromStage = state.stage, wasDeep = isDeep(fromStage);
+  state.rebirth = state.rebirth || { count:0 };
+  state.rebirth.count = rebirthCount() + 1;
+  const starters = ['emberling','aqualing','terrafang'].map(id=>newMonster(id,1,1));
+  state.roster = starters;
+  state.formation.front = starters.map(m=>m.uid);
+  state.formation.back = [null,null,null];
+  state.formSelected = null;
+  state.intel = { history: [], wins: 0 };
+  state.stage = 1;
+  const pct = Math.round((rebirthMultiplier()-1)*100);
+  journalAdd({
+    id: uid(), stage: fromStage, deep: wasDeep, win: true, boss: null,
+    text: `${legionBanner()} stands down at ${wasDeep?('Depth '+deepDepth(fromStage)):('Stage '+fromStage)} and starts again from nothing — by choice. Everything collected stays; the roster does not. The legion carries forward a permanent edge: every beast now fights ${pct}% stronger across the board.`,
+    at: Date.now(), portrait: null,
+  });
+  autosave();
+  sfx('levelup');
+  render();
+}
 function toggleEmblemPart(k){
   if(!PARTS[k] || unlockedPartKeys().indexOf(k)<0) return;
   const cur = Array.isArray(state.emblem) ? state.emblem.slice() : [];
@@ -1915,7 +2083,7 @@ function codexRecordMonster(m){
   if(!m) return;
   if(isHybridId(m.speciesId)) codexSee('hybrids', m.speciesId);
   else codexSee('species', m.speciesId);
-  (m.parts||[]).forEach(k=>codexSee('parts', k));
+  (m.parts||[]).forEach(k=>codexSee('parts', baseKeyOf(k)));
   if(m.trait) codexSee('traits', m.trait.key);
 }
 
@@ -1995,11 +2163,22 @@ function renderCodex(){
     </div>`;
   }).join('');
 
+  const bonusRows = Object.keys(CODEX_BONUSES).map(cat=>{
+    const b = CODEX_BONUSES[cat], have = codexBonusActive(cat);
+    return `<div style="color:${have?'var(--gold)':'var(--dim)'}; font-size:16px;">
+      ${have?'✔':'○'} <b>${b.name}</b> <span class="dim" style="font-size:14px;">(${b.box} ${codexCount(cat)}/${t[cat]})</span> — ${b.desc}</div>`;
+  }).join('');
+
   return `
   <div class="panel">
     <h2 class="section">BESTIARY — ${p.seen}/${p.total} recorded (${p.pct}%)</h2>
     <div class="gauge-bg"><div class="gauge-fill" style="width:${p.pct}%"></div></div>
     <p class="dim" style="margin-top:8px;">Everything here is filled in by meeting it: fielding a beast, fighting a chassis, standing on a battlefield, rolling a trait.</p>
+  </div>
+  <div class="panel">
+    <h2 class="section">COMPLETION BONUSES</h2>
+    <p class="dim">Filling in an entire section below grants a small permanent passive — no separate unlock, it just applies the moment the last entry is recorded.</p>
+    <div style="margin-top:8px;">${bonusRows}</div>
   </div>
   ${box('TRIBES OF TEXEL','species',speciesCards)}
   ${box('RUSTBOUND CHASSIS','enemies',enemyCards)}
@@ -2058,6 +2237,7 @@ function render(){
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
   else if(state.screen==='salvage') app.innerHTML = renderSalvage();
+  else if(state.screen==='forge') app.innerHTML = renderForge();
   else if(state.screen==='battle'){ app.innerHTML = renderBattle(); flushFx(); }
   else if(state.screen==='result') app.innerHTML = renderResult();
 }
@@ -2335,6 +2515,7 @@ function renderHub(){
       <button class="btn" onclick="goRoster()">📋 Roster & Fusion (${state.roster.length})</button>
       <button class="btn" onclick="goFormation()">⚔ Formation (${filled}/6)</button>
       <button class="btn rust" onclick="goSalvage()">⚙ Salvage Bay (${state.parts.length})</button>
+      <button class="btn rust" onclick="goForge()">🔨 The Forge</button>
       <button class="btn" onclick="goTribes()">🏕 Tribes${activeBlessing()?' ★':''}</button>
       <button class="btn" onclick="goCodex()">📖 Bestiary (${codexProgress().pct}%)</button>
       <button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>
@@ -2542,6 +2723,12 @@ function renderGuild(){
   }
   const r = social.raid;
   const pctHp = r ? Math.max(0, Math.round((r.hp / r.max_hp) * 100)) : 0;
+  const raidMuts = r ? currentRaidMutators() : [];
+  const raidMutRows = raidMuts.map(m=>`
+    <div style="border:1px solid var(--border); border-radius:8px; padding:6px 8px; margin-top:6px;">
+      <div>${m.emoji} <b>${escapeHtml(m.name)}</b></div>
+      <div class="dim" style="font-size:13px;">${escapeHtml(m.desc)}</div>
+    </div>`).join('');
   const board = social.board.map((row,i)=>
     `<div>${i+1}. ${escapeHtml(row.display_name)} — ${Number(row.damage).toLocaleString()}</div>`).join('') || '<div class="dim">No damage logged yet.</div>';
   const dmgByName = {};
@@ -2632,6 +2819,7 @@ function renderGuild(){
       <div style="font-size:22px; color:var(--danger)">☠ ${escapeHtml(r.name)}</div>
       <div class="gauge-bg" style="height:18px; margin-top:6px;"><div class="gauge-fill" style="width:${pctHp}%; background:linear-gradient(90deg,#8b1a2b,var(--danger));"></div></div>
       <div class="dim">${Number(r.hp).toLocaleString()} / ${Number(r.max_hp).toLocaleString()} HP${r.defeated_at?' — DEFEATED':''}</div>
+      ${raidMutRows?`<div style="margin-top:8px;"><div class="dim">This boss's modifiers</div>${raidMutRows}</div>`:''}
       ${r.defeated_at
         ? `<p style="color:var(--gold)">The guild brought it down. Start another whenever you like.</p>
            <button class="btn primary" ${social.busy?'disabled':''} onclick="doRaidStart()">Summon a new boss</button>`
@@ -2778,7 +2966,18 @@ function renderLegionId(){
       <span style="color:var(--gold); font-size:19px;">${escapeHtml(legionBanner())}</span>
     </p>
   </div>
-  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+  <div class="panel">
+    <h2 class="section">LEGION REBIRTH</h2>
+    <p class="dim">Wipe this legion's roster, levels and current stage back to the start — on purpose. Everything collected stays: the codex, tribe favour, champions, cleared trials, the salvage bay and this banner. What's lost is only the grind. In exchange, every beast you field afterward fights permanently harder.</p>
+    <p style="margin-top:8px;">Rebirths so far: <b style="color:var(--gold)">${rebirthCount()}</b>${rebirthCount()>0?` <span style="color:var(--gold)">${rebirthMark()}</span>`:''}
+      — current bonus <b style="color:var(--gold)">+${Math.round((rebirthMultiplier()-1)*100)}%</b> ATK/DEF/HP/SPD.
+      Rebirthing again would bring that to <b>+${Math.round((rebirthMultiplier()+REBIRTH_STAT_BONUS-1)*100)}%</b>.</p>
+    ${rebirthEligible()
+      ? `<button class="btn danger" style="margin-top:8px;" onclick="doRebirth()">${state.confirmRebirth?'⚠ Really wipe this legion — are you sure?':'☠ Rebirth this legion'}</button>
+         ${state.confirmRebirth?`<button class="btn small" style="margin-top:8px; margin-left:6px;" onclick="state.confirmRebirth=false; render();">Cancel</button>`:''}`
+      : `<p class="dim" style="margin-top:8px;">Unlocks once you reach Stage ${REBIRTH_MIN_STAGE} (currently Stage ${state.stage}).</p>`}
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.confirmRebirth=null; state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
 
 function renderMissions(){
@@ -3102,11 +3301,11 @@ function doFuse(){
 /* ============ SALVAGE BAY ============ */
 function renderSalvage(){
   const partCards = state.parts.map(p=>{
-    const d = PARTS[p.key];
+    const d = partInfo(p.key);
     const sel = state.selectedPart===p.uid;
     return `<div class="pcard ${sel?'selected':''}" onclick="selectPart('${p.uid}')">
-      <div class="pname">${d.emoji} ${d.name}</div>
-      <div>+${Math.round(d.pct*100)}% ${STAT_LABEL[d.stat]}</div>
+      <div class="pname">${d.forged?'🔨 ':''}${d.emoji} ${d.name}</div>
+      <div>+${Math.round(d.pct*100)}% ${STAT_LABEL[d.stat]}${d.forged?` · +${Math.round(d.bonusPct*100)}% ${STAT_LABEL[d.bonusStat]}`:''}</div>
       <span class="elem-tag elem-${d.element}">+${d.element}</span>
       <div style="color:var(--rust); font-size:13px;">⚙ +${d.corruption} rust</div>
     </div>`;
@@ -3122,7 +3321,7 @@ function renderSalvage(){
     for(let i=0;i<slots;i++){
       const k = (m.parts||[])[i];
       chips += k
-        ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${PARTS[k].emoji} ✖</span>`
+        ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${isForgedKey(k)?'🔨':''}${partInfo(k).emoji} ✖</span>`
         : `<span class="slotchip" onclick="installPart('${m.uid}')">+ empty</span>`;
     }
     const g = st.grafts;
@@ -3268,6 +3467,51 @@ function purgePart(monsterUid, slotIdx){
   const m = findMonster(monsterUid); if(!m) return;
   m.parts.splice(slotIdx,1);
   autosave();
+  render();
+}
+
+/* ============ THE FORGE ============
+   A sink for salvage that's outgrown its usefulness raw: burn 3 of the same
+   part and get back 1 named, upgraded part with a second stat the raw part
+   never carried. Net bay count always drops (-3 +1), so the 14-part cap is
+   never a concern here. */
+function goForge(){ state.screen='forge'; state.forgeMsg=''; render(); }
+function forgeStock(key){ return state.parts.filter(p=>p.key===key).length; }
+function renderForge(){
+  const rows = Object.keys(PARTS).map(k=>{
+    const P = PARTS[k], fb = FORGED_PARTS[k];
+    const have = forgeStock(k);
+    const ready = have >= FORGE_COST;
+    return `<div class="pcard" style="width:230px; ${ready?'':'opacity:0.55;'}">
+      <div class="pname">${P.emoji} ${escapeHtml(P.name)}</div>
+      <div class="dim" style="font-size:13px;">${have} in the bay (need ${FORGE_COST})</div>
+      <div class="dim" style="font-size:13px; margin-top:4px;">🔨 becomes <b>${escapeHtml(fb.name)}</b></div>
+      <div style="font-size:13px; color:var(--gold);">+${Math.round(P.pct*FORGE_PCT_MULT*100)}% ${STAT_LABEL[P.stat]} · +${Math.round(fb.bonusPct*100)}% ${STAT_LABEL[fb.bonusStat]}</div>
+      <div style="font-size:13px; color:var(--rust);">⚙ ${Math.max(1,Math.round(P.corruption*FORGE_CORRUPTION_MULT))} rust <span class="dim">(was ${P.corruption})</span></div>
+      <button class="btn small ${ready?'primary':''}" style="margin-top:6px;" ${ready?'':'disabled'} onclick="doForge('${k}')">Forge</button>
+    </div>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">THE FORGE</h2>
+    <p class="dim">Feed ${FORGE_COST} of the same salvage part into the Forge and walk away with one upgraded, named part: a stronger version of the stat it already had, plus a second stat the raw part never carried. The rest of the stack is consumed. Forged parts install and purge exactly like any other.</p>
+    ${state.forgeMsg?`<p style="color:var(--gold)">${escapeHtml(state.forgeMsg)}</p>`:''}
+    <div class="row" style="margin-top:8px;">${rows}</div>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.forgeMsg=''; state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+function doForge(key){
+  if(!PARTS[key]) return;
+  if(forgeStock(key) < FORGE_COST){ state.forgeMsg = 'Not enough '+PARTS[key].name+' in the bay.'; render(); return; }
+  let removed = 0;
+  state.parts = state.parts.filter(p=>{
+    if(p.key===key && removed<FORGE_COST){ removed++; return false; }
+    return true;
+  });
+  state.parts.push({ uid: uid(), key: key+FORGE_SUFFIX });
+  state.forgeMsg = `🔨 Forged ${FORGED_PARTS[key].name}.`;
+  autosave();
+  sfx('levelup');
   render();
 }
 
@@ -3449,6 +3693,7 @@ function applyMentorBonds(units){
 function buildPlayerUnits(terrain){
   const units = [];
   const councilOpt = councilLeadingOption();
+  const bossFight = !!bossForStage(state.stage);
   ['front','back'].forEach(row=>{
     state.formation[row].forEach(u=>{
       if(!u) return;
@@ -3468,6 +3713,13 @@ function buildPlayerUnits(terrain){
       if(hasPerk('might')){ unit.bAtk = Math.round(unit.bAtk*1.06); unit.bDef = Math.round(unit.bDef*1.06); }
       if(councilOpt==='atk') unit.bAtk = Math.round(unit.bAtk*1.08);
       if(councilOpt==='def') unit.bDef = Math.round(unit.bDef*1.08);
+      if(bossFight && codexBonusActive('bosses')){ unit.bAtk = Math.round(unit.bAtk*1.06); unit.bDef = Math.round(unit.bDef*1.06); }
+      if(codexBonusActive('traits')) unit.bSpd = Math.round(unit.bSpd*1.03);
+      if(rebirthCount()>0){
+        const rm = rebirthMultiplier();
+        unit.bAtk = Math.round(unit.bAtk*rm); unit.bDef = Math.round(unit.bDef*rm);
+        unit.bHp  = Math.round(unit.bHp *rm); unit.bSpd = Math.round(unit.bSpd*rm);
+      }
       const bless = activeBlessing();
       if(bless==='fire')   unit.bAtk = Math.round(unit.bAtk*1.10);
       if(bless==='earth')  unit.bDef = Math.round(unit.bDef*1.12);
@@ -3711,6 +3963,10 @@ function beginBattle(){
     } else {
       logMsg(`📡 The Rustbound anticipated your ${adapted} legion.`);
     }
+  }
+  if(codexBonusActive('terrains') && state.battle.gauge<100){
+    state.battle.gauge = Math.min(100, state.battle.gauge + 10);
+    logMsg(`🗺 Terrain Mastery: every battlefield charted — Legion Gauge starts +10%.`);
   }
   codexRecordBattle();
   state.screen = 'battle';
@@ -4489,9 +4745,20 @@ function endBattle(result){
   }
 
   if(state.raidRun){
-    const dealt = b.totalDamage || 0;
-    state.lastResult = { win:result==='win', raid:true, dealt, dailyDone };
+    const won = result==='win';
+    const dealt = computeRaidDamage(b);
+    const raidDrops = [];
+    if(won && raidMutatorActive('salvage')){
+      const keys = b.enemyUnits.map(u=>u.speciesKey).filter(Boolean);
+      for(let i=0;i<2 && state.parts.length<14 && keys.length;i++){
+        const drop = { uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] };
+        state.parts.push(drop);
+        raidDrops.push(drop);
+      }
+    }
+    state.lastResult = { win:won, raid:true, dealt, dailyDone, raidDrops, raidMutators:currentRaidMutators() };
     state.screen = 'result';
+    if(raidDrops.length) autosave();
     render();
     raidContribute(dealt).then(r=>{
       social.status = r.ok ? `Logged ${dealt} damage to the raid.` : ('Damage not logged: ' + (r.error||'unknown error'));
@@ -4520,7 +4787,7 @@ function endBattle(result){
   }
 
   if(result==='win'){
-    const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1) * (commanderHasPerk('exp_all') ? 1.05 : 1));
+    const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1) * (commanderHasPerk('exp_all') ? 1.05 : 1) * (codexBonusActive('enemies') ? 1.05 : 1));
     const levelled = awardExp(b.playerUnits, expGain);
 
     // --- Rustbound intel: they study what actually hurt them ---
@@ -4550,7 +4817,7 @@ function endBattle(result){
     const pulls = (isEliteStage(state.stage) || isBossWin) ? 2 : 1;
     for(let d=0; d<pulls; d++){
       if(state.parts.length>=14) break;
-      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0))) break;
+      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0))) break;
       const keys = b.enemyUnits.map(u=>u.speciesKey).filter(Boolean);
       if(!keys.length) break;
       const drop = { uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] };
@@ -4652,7 +4919,8 @@ function commanderAddXp(n){
   return commander.level>before ? commander.level : null;
 }
 function rosterCap(){
-  return 18 + (commanderHasPerk('roster_slot')?1:0) + (commanderHasPerk('roster_slot2')?1:0);
+  return 18 + (commanderHasPerk('roster_slot')?1:0) + (commanderHasPerk('roster_slot2')?1:0)
+       + (codexBonusActive('species')?1:0);
 }
 function goCommanderRank(){ state.screen='commander'; render(); }
 function renderCommanderRank(){
@@ -4909,11 +5177,14 @@ function renderResult(){
     </div>`;
   }
   if(r.raid){
+    const muts = r.raidMutators||[];
     return `
     <div class="panel" style="text-align:center;">
       <h1 class="title" style="font-size:20px;">RAID ATTEMPT</h1>
       <p>You dealt <b>${r.dealt.toLocaleString()}</b> damage to the boss.</p>
       <p class="dim">${r.win?'Your legion held the field.':'Your legion fell — the damage still counts.'}</p>
+      ${muts.length?`<p class="dim" style="font-size:14px;">${muts.map(m=>`${m.emoji} <b>${escapeHtml(m.name)}</b> was in effect this attempt`).join(' · ')}</p>`:''}
+      ${(r.raidDrops&&r.raidDrops.length)?`<p style="color:var(--rust)">⚙ Salvage Surge: ${r.raidDrops.map(d=>`<b>${PARTS[d.key].emoji} ${PARTS[d.key].name}</b>`).join(' + ')}</p>`:''}
       <p class="dim">${social.status?escapeHtml(social.status):'Logging damage…'}</p>
       <button class="btn primary" style="margin-top:10px;" onclick="endRaidRun()">Back to the Guild →</button>
     </div>`;

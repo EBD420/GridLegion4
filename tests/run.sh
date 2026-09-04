@@ -55,6 +55,10 @@ run commander-victory dom-storage-server.js "$H/assert.js" "$S/17-commander-vict
 run warlord-factions  dom-storage-server.js "$H/assert.js" "$S/18-warlord-factions.js"
 run guild-council      dom-storage-server.js "$H/assert.js" "$S/19-guild-council.js"
 run mentor-bonds       dom-storage-server.js "$H/assert.js" "$S/20-mentor-bonds.js"
+run codex-bonuses      dom-storage-server.js "$H/assert.js" "$S/21-codex-bonuses.js"
+run legion-rebirth     dom-storage-server.js "$H/assert.js" "$S/22-legion-rebirth.js"
+run the-forge          dom-storage-server.js "$H/assert.js" "$S/23-the-forge.js"
+run raid-mutators      dom-storage-server.js "$H/assert.js" "$S/24-raid-mutators.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

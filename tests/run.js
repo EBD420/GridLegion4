@@ -54,6 +54,10 @@ const SUITES = [
   { label:'warlord-factions',  harness:'dom-storage-server.js', assert:true, files:['18-warlord-factions.js'] },
   { label:'guild-council',     harness:'dom-storage-server.js', assert:true, files:['19-guild-council.js'] },
   { label:'mentor-bonds',      harness:'dom-storage-server.js', assert:true, files:['20-mentor-bonds.js'] },
+  { label:'codex-bonuses',     harness:'dom-storage-server.js', assert:true, files:['21-codex-bonuses.js'] },
+  { label:'legion-rebirth',    harness:'dom-storage-server.js', assert:true, files:['22-legion-rebirth.js'] },
+  { label:'the-forge',         harness:'dom-storage-server.js', assert:true, files:['23-the-forge.js'] },
+  { label:'raid-mutators',     harness:'dom-storage-server.js', assert:true, files:['24-raid-mutators.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;
