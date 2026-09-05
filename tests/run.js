@@ -89,6 +89,7 @@ const SUITES = [
   { label:'hub-tabs',           harness:'dom-storage-server.js', assert:true, files:['53-hub-tabs.js'] },
   { label:'replay-playback',    harness:'dom-storage-server.js', assert:true, files:['54-replay-playback.js'] },
   { label:'guild-projects',     harness:'dom-storage-server.js', assert:true, files:['55-guild-projects.js'] },
+  { label:'black-market',       harness:'dom-storage-server.js', assert:true, files:['56-black-market.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

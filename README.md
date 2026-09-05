@@ -272,6 +272,16 @@ bonus rather than a live timer: her clock is only ever checked at the moments a 
 already returns the legion to the Hub, so she can spawn or expire between one login
 and the next, but never mid-fight.
 
+**The Black Market.** A second, shadier trader independent of the Caravan, dealing in
+exactly one thing: a named chassis's part, shown up front rather than hidden in a
+mystery box, for a single ordinary salvage part — a steep discount for a part that
+hits noticeably harder than anything the Forge can produce. The catch is corruption,
+normally a pure downside, runs the other way: a Black-Market part is deliberately
+hotter than the raw part it's built from, the inverse of what Forging the same part
+would do. Same rotation-and-expiry clock as the Caravan, reused wholesale, just tuned
+rarer and more fleeting — a longer gap between appearances, a shorter window once she
+turns up, and lower odds of showing at all.
+
 **Trophy Case.** A pure-fluff Hub screen that lays out the legion's best moments side
 by side — deepest Reach, longest win streak, the toughest Ace and Vanguard ever felled,
 and a per-theory tally of Archive findings. Deepest Reach and the Archive already kept
@@ -384,7 +394,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2719 assertions, no dependencies beyond `node`. The suites extract the script out of
+2793 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

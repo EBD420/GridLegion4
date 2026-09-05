@@ -270,6 +270,7 @@
   .intel-banner{ font-size:16px; color:var(--rust); border:1px dashed var(--rust); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(226,136,74,0.08); }
   .doctrine-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.08); }
   .caravan-banner{ font-size:16px; color:var(--gold); border:1px dashed var(--gold); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,178,56,0.08); }
+  .black-market-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .threat-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .gauge-wrap{ margin-bottom:12px; }
   .gauge-label{ font-size:14px; color:var(--gold); margin-bottom:3px; }
@@ -492,10 +493,24 @@ function isAceKey(key){ return typeof key==='string' && key.length>ACE_SUFFIX.le
 const VANGUARD_SUFFIX = '_vanguard';
 const VANGUARD_PCT_BONUS = 0.03;
 function isVanguardKey(key){ return typeof key==='string' && key.length>VANGUARD_SUFFIX.length && key.slice(-VANGUARD_SUFFIX.length)===VANGUARD_SUFFIX; }
+/* ---- The Black Market: a second, shadier trader alongside the Scavenger
+   Caravan (see the caravan block below) — she deals in a single named
+   chassis's part at a steep discount, but it runs noticeably hotter than a
+   raw part: a bigger stat boost than even a Forge upgrade, in exchange for
+   a corruption INCREASE rather than the decrease Forge gives. Corruption is
+   otherwise a pure downside (see monsterCorruption/corrTier below), so this
+   is the one part in the game a player might equip specifically to court it.
+   Same suffix trick as Forge/Ace/Vanguard, same partInfo() resolution, so it
+   slots into Set Bonuses and every other part-consuming system for free. ---- */
+const BLACK_MARKET_SUFFIX = '_black';
+const BLACK_MARKET_PCT_MULT = 1.5;
+const BLACK_MARKET_CORRUPTION_MULT = 1.75;
+function isBlackMarketKey(key){ return typeof key==='string' && key.length>BLACK_MARKET_SUFFIX.length && key.slice(-BLACK_MARKET_SUFFIX.length)===BLACK_MARKET_SUFFIX; }
 function baseKeyOf(key){
   if(isForgedKey(key)) return key.slice(0, -FORGE_SUFFIX.length);
   if(isAceKey(key)) return key.slice(0, -ACE_SUFFIX.length);
   if(isVanguardKey(key)) return key.slice(0, -VANGUARD_SUFFIX.length);
+  if(isBlackMarketKey(key)) return key.slice(0, -BLACK_MARKET_SUFFIX.length);
   return key;
 }
 /* Resolves a state.parts / monster.parts key (raw, forged, or ace) to full
@@ -525,6 +540,13 @@ function partInfo(key){
     return {
       name: 'Vanguard Trophy: ' + base.name, emoji: base.emoji, element: base.element, desc: base.desc,
       stat: base.stat, pct: Math.round((base.pct+VANGUARD_PCT_BONUS)*100)/100, corruption: base.corruption, vanguard: true,
+    };
+  }
+  if(isBlackMarketKey(key)){
+    return {
+      name: 'Black-Market ' + base.name, emoji: base.emoji, element: base.element, desc: base.desc,
+      stat: base.stat, pct: Math.round(base.pct*BLACK_MARKET_PCT_MULT*100)/100,
+      corruption: Math.round(base.corruption*BLACK_MARKET_CORRUPTION_MULT), black: true,
     };
   }
   return base;
@@ -929,6 +951,63 @@ function acceptCaravanTrade(){
   }
   state.caravan = null;
   state.caravanNextEligible = Date.now() + CARAVAN_MIN_GAP_MS;
+  autosave();
+  render();
+}
+
+/* ============ THE BLACK MARKET ============
+   A second, shadier trader who shows up independently of the Scavenger
+   Caravan above and only ever offers one thing: a single named chassis's
+   Black-Market part (see partInfo/isBlackMarketKey above), shown up front —
+   never a blind box — for a flat, steep-discount cost in ordinary salvage
+   parts. Same rotation/expiry plumbing as the Caravan, reused wholesale (a
+   pure function of an injectable nowMs, ticked only at the same two choke
+   points: continueSlot() and endBattle()'s shared win/loss tail), but tuned
+   rarer and more fleeting to feel dangerous rather than routine: a longer
+   gap between eligible rolls, a shorter window once she appears, and lower
+   odds of showing up at all. No decline button, same as the Caravan — she
+   just moves on if you don't bite.
+   ============================================= */
+const BLACK_MARKET_MIN_GAP_MS = 20*60*1000; // real minutes before the NEXT offer becomes eligible to roll
+const BLACK_MARKET_WINDOW_MS  = 8*60*1000;  // real minutes an offer stays open before she moves on
+const BLACK_MARKET_SPAWN_CHANCE = 0.25;     // odds a roll actually produces an offer, once eligible
+const BLACK_MARKET_PART_COST = 1;           // ordinary salvage parts spent for one Black-Market part
+
+function blackMarketOfferText(o){
+  if(!o) return '';
+  const d = partInfo(o.key + BLACK_MARKET_SUFFIX);
+  if(!d) return '';
+  return `☠️ ${d.emoji} ${d.name}: +${Math.round(d.pct*100)}% ${STAT_LABEL[d.stat]} for ${BLACK_MARKET_PART_COST} salvage part — but ⚙ +${d.corruption} rust, no questions asked.`;
+}
+function blackMarketCanAfford(o){
+  if(!o) return false;
+  return state.parts.length>=BLACK_MARKET_PART_COST && state.parts.length<14;
+}
+function rollBlackMarketOffer(nowMs){
+  state.blackMarket = {
+    key: ENEMY_IDS[Math.floor(Math.random()*ENEMY_IDS.length)],
+    expiresAt: nowMs + BLACK_MARKET_WINDOW_MS,
+  };
+}
+/* The only two call sites are continueSlot() and endBattle()'s shared win/loss
+   tail — never a setInterval, so the Hub banner never needs a live countdown. */
+function tickBlackMarket(nowMs){
+  if(state.blackMarket && state.blackMarket.expiresAt<=nowMs){
+    state.blackMarket = null;
+    state.blackMarketNextEligible = nowMs + BLACK_MARKET_MIN_GAP_MS;
+  }
+  if(!state.blackMarket && nowMs>=(state.blackMarketNextEligible||0)){
+    if(Math.random()<BLACK_MARKET_SPAWN_CHANCE) rollBlackMarketOffer(nowMs);
+    else state.blackMarketNextEligible = nowMs + BLACK_MARKET_MIN_GAP_MS;
+  }
+}
+function acceptBlackMarketTrade(){
+  const o = state.blackMarket;
+  if(!o || !blackMarketCanAfford(o)) return;
+  state.parts.splice(0, BLACK_MARKET_PART_COST);
+  state.parts.push({ uid: uid(), key: o.key + BLACK_MARKET_SUFFIX });
+  state.blackMarket = null;
+  state.blackMarketNextEligible = Date.now() + BLACK_MARKET_MIN_GAP_MS;
   autosave();
   render();
 }
@@ -2101,6 +2180,8 @@ function serializeSave(){
     augmentStagesOffered: state.augmentStagesOffered,
     caravan: state.caravan,
     caravanNextEligible: state.caravanNextEligible,
+    blackMarket: state.blackMarket,
+    blackMarketNextEligible: state.blackMarketNextEligible,
     bestStreak: state.bestStreak,
     trophyAce: state.trophyAce,
     trophyVanguard: state.trophyVanguard,
@@ -2338,6 +2419,16 @@ function applySave(d, slot){
       && typeof d.caravan.expiresAt==='number' && isFinite(d.caravan.expiresAt))
     ? { type: d.caravan.type, tribe: d.caravan.tribe, expiresAt: d.caravan.expiresAt } : null;
   state.caravanNextEligible = (typeof d.caravanNextEligible==='number' && isFinite(d.caravanNextEligible)) ? d.caravanNextEligible : 0;
+  /* The Black Market: same "revived as raw data only, re-decided against real
+     time by tickBlackMarket() right after this call returns" treatment as the
+     Caravan above. Only a well-formed offer naming a real chassis survives —
+     ENEMY_IDS is the whitelist, same set the Caravan's own reward loop draws
+     from. */
+  state.blackMarket = (d.blackMarket && typeof d.blackMarket==='object'
+      && ENEMY_IDS.indexOf(d.blackMarket.key)>=0
+      && typeof d.blackMarket.expiresAt==='number' && isFinite(d.blackMarket.expiresAt))
+    ? { key: d.blackMarket.key, expiresAt: d.blackMarket.expiresAt } : null;
+  state.blackMarketNextEligible = (typeof d.blackMarketNextEligible==='number' && isFinite(d.blackMarketNextEligible)) ? d.blackMarketNextEligible : 0;
   /* Trophy Case: three permanent high-water marks (see noteTrophy / the win-
      streak update in endBattle's tail) — same "survives Rebirth" treatment
      as Doctrine, the Archive and bestDepth above (doRebirth never touches
@@ -2625,6 +2716,8 @@ function initGame(){
   state.augmentDraft = null;
   state.caravan = null;
   state.caravanNextEligible = Date.now() + CARAVAN_MIN_GAP_MS;
+  state.blackMarket = null;
+  state.blackMarketNextEligible = Date.now() + BLACK_MARKET_MIN_GAP_MS;
   state.bestStreak = 0;
   state.trophyAce = null;
   state.trophyVanguard = null;
@@ -3577,6 +3670,8 @@ function continueSlot(i){
   // open when the tab closed should read as expired (or a fresh one eligible)
   // by the time the player is back, not frozen at however it last looked.
   tickCaravan(Date.now());
+  // The Black Market gets the same real-time re-sync, on its own clock.
+  tickBlackMarket(Date.now());
   autosave();
   state.screen = 'camp';
   render();
@@ -3888,6 +3983,11 @@ function renderHub(){
       ${caravanOfferText(state.caravan)}<br>
       <button class="btn small ${caravanCanAfford(state.caravan)?'primary':''}" style="margin-top:4px;" ${caravanCanAfford(state.caravan)?'':'disabled'} onclick="acceptCaravanTrade()">Trade</button>
       ${caravanCanAfford(state.caravan)?'':'<span class="dim"> — can\'t make this trade right now.</span>'}
+    </div>` : ''}
+    ${state.blackMarket ? `<div class="black-market-banner">☠️ <b>THE BLACK MARKET</b><br>
+      ${blackMarketOfferText(state.blackMarket)}<br>
+      <button class="btn small ${blackMarketCanAfford(state.blackMarket)?'danger':''}" style="margin-top:4px;" ${blackMarketCanAfford(state.blackMarket)?'':'disabled'} onclick="acceptBlackMarketTrade()">Buy</button>
+      ${blackMarketCanAfford(state.blackMarket)?'':'<span class="dim"> — can\'t make this trade right now.</span>'}
     </div>` : ''}
     ${AUGMENT_IDS.some(hasAugment) ? `<p class="dim">🎴 Augments: ${AUGMENT_IDS.filter(hasAugment).map(id=>AUGMENTS[id].name).join(', ')}</p>` : ''}
     ${state.loginStreak>0 ? `<p class="dim">📅 Login streak: <b style="color:var(--gold)">${state.loginStreak}</b> day${state.loginStreak===1?'':'s'} running${state.bestLoginStreak>state.loginStreak?` (best ${state.bestLoginStreak})`:''}</p>` : ''}
@@ -5191,7 +5291,7 @@ function renderSalvage(){
     const d = partInfo(p.key);
     const sel = state.selectedPart===p.uid;
     return `<div class="pcard ${sel?'selected':''}" onclick="selectPart('${p.uid}')">
-      <div class="pname">${d.forged?'🔨 ':''}${d.ace?'⭐ ':''}${d.vanguard?'🛡️ ':''}${d.emoji} ${d.name}</div>
+      <div class="pname">${d.forged?'🔨 ':''}${d.ace?'⭐ ':''}${d.vanguard?'🛡️ ':''}${d.black?'☠️ ':''}${d.emoji} ${d.name}</div>
       <div>+${Math.round(d.pct*100)}% ${STAT_LABEL[d.stat]}${d.forged?` · +${Math.round(d.bonusPct*100)}% ${STAT_LABEL[d.bonusStat]}`:''}</div>
       <span class="elem-tag elem-${d.element}">+${d.element}</span>
       <div style="color:var(--rust); font-size:13px;">⚙ +${d.corruption} rust</div>
@@ -5208,7 +5308,7 @@ function renderSalvage(){
     for(let i=0;i<slots;i++){
       const k = (m.parts||[])[i];
       chips += k
-        ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${isForgedKey(k)?'🔨':''}${isAceKey(k)?'⭐':''}${isVanguardKey(k)?'🛡️':''}${partInfo(k).emoji} ✖</span>`
+        ? `<span class="slotchip used" onclick="purgePart('${m.uid}',${i})" title="Purge">${isForgedKey(k)?'🔨':''}${isAceKey(k)?'⭐':''}${isVanguardKey(k)?'🛡️':''}${isBlackMarketKey(k)?'☠️':''}${partInfo(k).emoji} ✖</span>`
         : `<span class="slotchip" onclick="installPart('${m.uid}')">+ empty</span>`;
     }
     const g = st.grafts;
@@ -8036,6 +8136,8 @@ function endBattle(result){
   // tutorial (which all return earlier above), so a real-time-gated offer only
   // ever spawns or expires against battles that actually return to the Hub.
   tickCaravan(Date.now());
+  // The Black Market: same shared tail, same exclusions, own independent clock.
+  tickBlackMarket(Date.now());
   // Online Now: same shared tail, same exclusions — a fire-and-forget
   // heartbeat so a legion shows up as active from ordinary play, not only
   // when the player happens to have the Online Now screen open.

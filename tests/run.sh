@@ -90,6 +90,7 @@ run guild-wars          dom-storage-server.js "$H/assert.js" "$S/52-guild-wars.j
 run hub-tabs            dom-storage-server.js "$H/assert.js" "$S/53-hub-tabs.js"
 run replay-playback     dom-storage-server.js "$H/assert.js" "$S/54-replay-playback.js"
 run guild-projects      dom-storage-server.js "$H/assert.js" "$S/55-guild-projects.js"
+run black-market        dom-storage-server.js "$H/assert.js" "$S/56-black-market.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"
