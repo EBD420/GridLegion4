@@ -1114,9 +1114,11 @@ function hireMercenary(speciesId){
    World Boss/Guild War and Trials each already run their own separate
    difficulty/scoring layer, and the tutorial is a fixed scripted scouting
    pair) — minus Reinforcements' own boss exclusion, which doesn't apply to
-   either mechanic here. */
+   either mechanic here. The Gauntlet (see THE GAUNTLET below) joins the
+   same exclusion list for the same reason: it runs its own score, not the
+   campaign's. */
 function isCampaignBattle(){
-  return !state.duel && !state.raidRun && !state.worldBossRun && !state.guildWarRun && !state.trial && !tutorialActive();
+  return !state.duel && !state.raidRun && !state.worldBossRun && !state.guildWarRun && !state.trial && !state.gauntletRun && !tutorialActive();
 }
 function mercenaryEligibleBattle(){ return isCampaignBattle(); }
 /* Built the same way buildPlayerUnits() builds a real monster's unit —
@@ -2385,6 +2387,8 @@ function serializeSave(){
     badgesUnlocked: Array.isArray(state.badgesUnlocked) ? state.badgesUnlocked.slice() : [],
     badge: state.badge || null,
     replays: Array.isArray(state.replays) ? state.replays.slice(0, REPLAY_CAP) : [],
+    gauntletBest: state.gauntletBest || 0,
+    hqDisplay: Array.isArray(state.hqDisplay) ? state.hqDisplay.slice(0, HQ_SLOT_COUNT) : [],
   };
 }
 function validateSave(d){
@@ -2677,6 +2681,16 @@ function applySave(d, slot){
      BATTLE REPLAYS block below) — revived the same defensive way as the
      War Journal above, since it round-trips through the same save file. */
   state.replays = reviveReplays(d.replays);
+  /* The Gauntlet: gauntletBest is a permanent high-water mark, same
+     treatment as bestDepth/bestStreak above — survives Rebirth, reset only
+     by initGame(). The run flags themselves (gauntletRun/gauntlet) are
+     never persisted, same as raidRun/trial/redeploy/detour/undercroft. */
+  state.gauntletBest = (typeof d.gauntletBest==='number' && isFinite(d.gauntletBest) && d.gauntletBest>=0) ? Math.floor(d.gauntletBest) : 0;
+  state.gauntletRun = false;
+  state.gauntlet = null;
+  /* Legion HQ: only keys the current build still recognizes are kept, same
+     "filtered against the live catalog" treatment as badgesUnlocked above. */
+  state.hqDisplay = Array.isArray(d.hqDisplay) ? d.hqDisplay.filter(k=>HQ_PROPS[k]).slice(0,HQ_SLOT_COUNT) : [];
   state.battle = null; state.playback = null; state.lastResult = null; state.lastFusion = null;
   state.formSelected = null; state.selectedPart = null; state.campWelcome = null; state.renamingUid = null;
   fuseSelection = [];
@@ -2840,6 +2854,8 @@ let state = {
   journal: [],
   replays: [],
   bestDepth: 0,
+  gauntletBest: 0,
+  hqDisplay: [],
   saveState: 'none',
   transfer: null,
   battle: null,
@@ -2951,6 +2967,17 @@ function initGame(){
   state.badgesUnlocked = [];
   state.badge = null;
   state.replays = [];
+  // The Gauntlet: gauntletBest is a permanent high-water mark, same
+  // treatment as bestDepth/bestStreak above (reset only here, never by
+  // Rebirth). The run flags themselves are always transient — never
+  // persisted, never mid-run across a reload, same as raidRun/trial/etc.
+  state.gauntletRun = false;
+  state.gauntlet = null;
+  state.stageBeforeGauntlet = null;
+  state.gauntletBest = 0;
+  // Legion HQ: which earned props are on display — a fresh legion's diorama
+  // starts empty, same as a fresh legion's emblem.
+  state.hqDisplay = [];
 }
 
 function getSpeciesData(speciesId, tier){
@@ -3744,6 +3771,8 @@ function render(){
   else if(state.screen==='trials') app.innerHTML = renderTrials();
   else if(state.screen==='redeploy') app.innerHTML = renderRedeploy();
   else if(state.screen==='campaignmap') app.innerHTML = renderCampaignMap();
+  else if(state.screen==='gauntlet') app.innerHTML = renderGauntlet();
+  else if(state.screen==='legionhq') app.innerHTML = renderLegionHQ();
   else if(state.screen==='camp') app.innerHTML = renderCamp();
   else if(state.screen==='tribes') app.innerHTML = renderTribes();
   else if(state.screen==='missions') app.innerHTML = renderMissions();
@@ -4164,6 +4193,7 @@ function renderHub(){
       `<button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>`,
       `<button class="btn" onclick="goDepthChart()">🗺 Depth Chart</button>`,
       `<button class="btn" onclick="goTrophyCase()">🏆 Trophy Case</button>`,
+      `<button class="btn" onclick="goLegionHQ()">🏛 Legion HQ</button>`,
       `<button class="btn" onclick="goReplays()">🎬 Replays${state.replays&&state.replays.length?' ('+state.replays.length+')':''}</button>`,
       `<button class="btn small" onclick="goCommanderRank()">🎖 Commander Rank ${commander.level}</button>`,
     ]},
@@ -4173,6 +4203,7 @@ function renderHub(){
       clearedStages().length?`<button class="btn" onclick="goRedeploy()">🔁 Redeployment (${clearedStages().length})</button>`:'',
       `<button class="btn" onclick="goCampaignMap()">🧭 Campaign Map</button>`,
       `<button class="btn" onclick="goCamp()">⛺ The Camp</button>`,
+      gauntletAvailable()?`<button class="btn" onclick="goGauntlet()">☠ The Gauntlet${state.gauntletBest?' (best: Wave '+state.gauntletBest+')':''}</button>`:'',
     ]},
     { id:'online', label:'📡 Online', buttons: [
       `<button class="btn small" onclick="goGuild()">🛡 Guild</button>`,
@@ -5197,6 +5228,78 @@ function endUndercroft(){
   state.screen = 'hub';
   autosave();
   render();
+}
+
+/* ================= THE GAUNTLET =================
+   An endless survival mode off to the side of the campaign proper — no
+   story stage, no retreat once it starts, just wave after wave until you
+   lose. It reuses the Deep's already-tuned, already-endless scaling wholesale
+   rather than inventing a second difficulty curve: wave N is simply fought
+   at the virtual stage CAMPAIGN_LENGTH+N (i.e. Depth N), through the exact
+   same terrainForStage()/buildEnemyUnits() beginBattle() already calls for
+   any other fight, with state.stage temporarily overridden and restored
+   afterward — the same "anchor stage, restore on exit" trick Redeployment,
+   a Detour and the Undercroft above all already use. Each wave is a fresh,
+   fully-crewed fight built straight from the current roster (no HP or
+   fainted status carried over between waves) — the escalating Depth scaling
+   alone is what makes it a real gauntlet, not attrition on top of it.
+
+   It sits outside isCampaignBattle() (see above), same boundary Duels,
+   Raids, the World Boss, Guild War and Trials already draw, so it neither
+   costs per-wave Energy nor feeds EXP, recruits, Rustbound Doctrine,
+   Battle-Forged Bonds or state.cleared — it is its own separate scoring
+   layer, exactly like those. What it tracks instead is a single permanent
+   number: the deepest wave this legion has ever cleared, gauntletBest — a
+   Trophy-Case-style high-water mark (reset only by initGame(), never by
+   Rebirth) that gives a clean score to chase independent of story stage. A
+   modest, capped salvage drop per wave cleared acknowledges the effort
+   without turning this into a better campaign farm than the campaign. */
+const GAUNTLET_ENTRY_COST = 5; // deliberately equal to ENERGY_COST_PER_BATTLE — one flat fee, however many waves you go on to clear
+function gauntletAvailable(){ return clearedStages().indexOf(CAMPAIGN_LENGTH) >= 0; }
+function beginGauntlet(){
+  if(!gauntletAvailable()) return;
+  const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+  if(filled===0 || !hasEnergyFor(GAUNTLET_ENTRY_COST)) return;
+  spendEnergy(GAUNTLET_ENTRY_COST);
+  state.gauntletRun = true;
+  state.gauntlet = { wave: 1 };
+  state.stageBeforeGauntlet = state.stage;
+  state.stage = CAMPAIGN_LENGTH + 1;
+  beginBattle();
+  logMsg('☠ The Gauntlet opens — no retreat from here. Wave 1.');
+}
+/* Called from the result screen's "Continue" button after clearing a wave —
+   the only way forward once the Gauntlet has started; there is no "return
+   to Hub and keep the score" option, by design. */
+function continueGauntlet(){
+  if(!state.gauntletRun || !state.gauntlet) return;
+  state.stage = CAMPAIGN_LENGTH + state.gauntlet.wave;
+  beginBattle();
+}
+function endGauntlet(){
+  state.stage = state.stageBeforeGauntlet || state.stage;
+  state.gauntletRun = false;
+  state.gauntlet = null;
+  state.battle = null;
+  state.screen = 'hub';
+  autosave();
+  render();
+}
+function goGauntlet(){ state.screen='gauntlet'; sfx('click'); render(); }
+function renderGauntlet(){
+  const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+  const afford = hasEnergyFor(GAUNTLET_ENTRY_COST);
+  const canStart = filled>0 && afford;
+  return `
+  <div class="panel">
+    <h2 class="section">THE GAUNTLET</h2>
+    <p class="dim">Wave after wave, scaled the same way the Deep already scales past Stage ${CAMPAIGN_LENGTH} — no story stage, no rewards pipeline, no retreat once it starts. Win a wave and it throws the next, harder one at you immediately; the run only ends when you lose. The only thing it keeps is a single number: the deepest wave you've ever cleared.</p>
+    <p style="margin-top:8px;">Personal best: <b style="color:var(--gold)">${state.gauntletBest?('Wave '+state.gauntletBest):'—'}</b></p>
+    <p class="dim">Entry costs ${GAUNTLET_ENTRY_COST} energy, charged once — however many waves you go on to clear.</p>
+    <button class="btn primary" style="margin-top:10px;" ${canStart?'':'disabled'} onclick="beginGauntlet()">☠ Enter the Gauntlet</button>
+    ${filled===0?'<p class="dim">Assign at least one monster to your formation first.</p>':(!afford?`<p class="dim">Needs ${GAUNTLET_ENTRY_COST} energy — you have ${energy.current}.</p>`:'')}
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
 function renderCampaignMap(){
   tickEnergy(Date.now());
@@ -6330,6 +6433,90 @@ function renderTrophyCase(){
     <h2 class="section">ARCHIVE FINDINGS — ${archiveFoundCount()}/${ARCHIVE_FRAGMENTS.length}</h2>
     ${theoryLines}
     <button class="btn small" style="margin-top:8px;" onclick="goArchive()">📜 Open the full Archive</button>
+  </div>
+  <div class="panel">
+    <p class="dim">Want these on display instead of just on paper? <span style="cursor:pointer; text-decoration:underline;" onclick="goLegionHQ()">Decorate the Legion HQ</span>.</p>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
+/* ============ LEGION HQ ============
+   A home-base screen decorated with things this legion has actually
+   earned — trophies, banners, a defeated commander's own wreckage — sitting
+   right alongside Trophy Case and Legion Identity. Deliberately just a
+   diorama: every prop's unlock condition reads an existing permanent record
+   (trophyAce/trophyVanguard/bestDepth/bestStreak/badgesUnlocked/the Archive/
+   gauntletBest) rather than tracking anything new to earn, and arranging
+   the display changes nothing about how a fight plays out — same "mostly
+   cosmetic flex" spirit as the emblem/badge pickers on Legion Identity,
+   whose toggle-with-a-cap pattern (see toggleEmblemPart) hqDisplay below
+   copies wholesale. A natural place to eventually hang small passive perks,
+   but this pass is display-only. */
+const HQ_SLOT_COUNT = 6;
+const HQ_PROPS = {
+  ace_trophy:        { emoji:'⭐', name:"The Ace's Head",       desc:'Mounted the day this legion felled its first Rustbound Ace.',
+                       unlocked: ()=>!!state.trophyAce },
+  vanguard_trophy:    { emoji:'🛡️', name:"The Vanguard's Shield", desc:"Salvaged whole off an Elite Wave's escort leader.",
+                       unlocked: ()=>!!state.trophyVanguard },
+  deep_banner:        { emoji:'🗺️', name:'Deep Survey Banner',    desc:'Marks the deepest this legion has ever pushed into the Deep.',
+                       unlocked: ()=>(state.bestDepth||0)>0 },
+  streak_flag:        { emoji:'🔥', name:'Win Streak Flag',       desc:'Flown for a run of at least 5 wins in a row.',
+                       unlocked: ()=>(state.bestStreak||0)>=5 },
+  commander5_skull:   { emoji:'💀', name:'Commander Skull — Stage 5',  desc:'A trophy from the first scripted commander fight.',
+                       unlocked: ()=>!!state.cleared[5] },
+  commander9_skull:   { emoji:'💀', name:'Commander Skull — Stage 9',  desc:'A trophy from the second scripted commander fight.',
+                       unlocked: ()=>!!state.cleared[9] },
+  gate_relic:         { emoji:'🏛️', name:'A Piece of the Gate',   desc:'Salvaged from the gate itself, the day the campaign was won.',
+                       unlocked: ()=>!!state.cleared[CAMPAIGN_LENGTH] },
+  archive_shelf:      { emoji:'📜', name:'Archive Shelf',         desc:'Every Archive fragment this legion has ever recovered, shelved in one place.',
+                       unlocked: ()=>archiveFoundCount()>=ARCHIVE_FRAGMENTS.length },
+  badge_case:         { emoji:'🎖️', name:'Badge Case',            desc:'Every Legion Banner this legion has ever earned, mounted together.',
+                       unlocked: ()=>(state.badgesUnlocked||[]).length>0 },
+  gauntlet_marker:    { emoji:'☠️', name:'Gauntlet Marker',        desc:'Notched for the deepest wave ever cleared in the Gauntlet.',
+                       unlocked: ()=>(state.gauntletBest||0)>0 },
+};
+function toggleHqProp(k){
+  if(!HQ_PROPS[k] || !HQ_PROPS[k].unlocked()) return;
+  const cur = Array.isArray(state.hqDisplay) ? state.hqDisplay.slice() : [];
+  const i = cur.indexOf(k);
+  if(i>=0) cur.splice(i,1);
+  else if(cur.length<HQ_SLOT_COUNT) cur.push(k);
+  else { sfx('click'); return; }
+  state.hqDisplay = cur;
+  autosave();
+  sfx('click');
+  render();
+}
+function goLegionHQ(){ state.screen='legionhq'; sfx('click'); render(); }
+function renderLegionHQ(){
+  const cur = Array.isArray(state.hqDisplay) ? state.hqDisplay : [];
+  const slots = Array.from({length:HQ_SLOT_COUNT}, (_,i)=>{
+    const k = cur[i], P = k ? HQ_PROPS[k] : null;
+    return P
+      ? `<div class="pcard selected" style="width:140px; text-align:center; cursor:pointer;" onclick="toggleHqProp('${k}')">
+           <div class="pname">${P.emoji} ${escapeHtml(P.name)}</div>
+           <div class="dim" style="font-size:12px; margin-top:2px;">tap to put away</div>
+         </div>`
+      : `<div class="pcard" style="width:140px; text-align:center; opacity:0.35; cursor:default;">
+           <div class="pname">— empty —</div>
+         </div>`;
+  }).join('');
+  const chips = Object.keys(HQ_PROPS).map(k=>{
+    const P = HQ_PROPS[k], has = P.unlocked(), on = cur.indexOf(k)>=0;
+    return `<div class="pcard ${on?'selected':''}" style="width:190px; ${has?'cursor:pointer;':'cursor:default; opacity:0.35;'}" ${has?`onclick="toggleHqProp('${k}')"`:''}>
+      <div class="pname">${has?P.emoji+' '+escapeHtml(P.name):'🔒 ???'}</div>
+      <div class="dim" style="font-size:13px;">${has?(on?'on display — tap to put away':'tap to display'):escapeHtml(P.desc)}</div>
+    </div>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">LEGION HQ</h2>
+    <p class="dim">A home base decorated with what this legion has actually earned. Purely for show — nothing here changes how a fight plays out.</p>
+    <div class="row" style="margin-top:8px;">${slots}</div>
+  </div>
+  <div class="panel">
+    <h2 class="section">EARNED PROPS — ${cur.length}/${HQ_SLOT_COUNT} on display</h2>
+    <div class="row" style="margin-top:6px;">${chips}</div>
   </div>
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
@@ -8296,6 +8483,36 @@ function endBattle(result){
     return;
   }
 
+  if(state.gauntletRun){
+    const g = state.gauntlet;
+    if(result==='win'){
+      let drop = null;
+      if(state.parts.length<14){
+        drop = { uid: uid(), key: ENEMY_IDS[Math.floor(Math.random()*ENEMY_IDS.length)] };
+        state.parts.push(drop);
+      }
+      if(g.wave > (state.gauntletBest||0)) state.gauntletBest = g.wave;
+      state.lastResult = { win:true, gauntlet:true, waveCleared:g.wave, drop,
+        isRecord: g.wave===state.gauntletBest };
+      g.wave++;
+      state.screen = 'result';
+      sfx('victory');
+      render();
+      return;
+    }
+    const wavesCleared = g.wave - 1;
+    state.lastResult = { win:false, gauntlet:true, wavesCleared, best: state.gauntletBest||0,
+      isRecord: wavesCleared>0 && wavesCleared===state.gauntletBest };
+    state.stage = state.stageBeforeGauntlet || state.stage;
+    state.gauntletRun = false;
+    state.gauntlet = null;
+    state.screen = 'result';
+    sfx('defeat');
+    autosave();
+    render();
+    return;
+  }
+
   if(result==='win'){
     const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1) * (commanderHasPerk('exp_all') ? 1.05 : 1) * (codexBonusActive('enemies') ? 1.05 : 1) * (1 + companionPerkPct('exp')));
     const levelled = awardExp(b.playerUnits, expGain);
@@ -8958,6 +9175,25 @@ function renderResult(){
       <h1 class="title" style="font-size:20px; color:var(--danger);">TRIAL FAILED</h1>
       <p class="dim">${escapeHtml(names)} proved too much. Nothing lost but the attempt.</p>
       <button class="btn primary" style="margin-top:10px;" onclick="endTrial()">Return to Hub →</button>
+    </div>`;
+  }
+  if(r.gauntlet){
+    if(r.win){
+      return `
+      <div class="panel" style="text-align:center;">
+        <h1 class="title" style="font-size:20px;">WAVE ${r.waveCleared} CLEARED</h1>
+        ${r.isRecord?`<p style="color:var(--gold)">🏆 New personal best — Wave ${r.waveCleared}!</p>`:''}
+        ${r.drop?`<p style="color:var(--rust)">⚙ Stripped from the wreckage: <b>${PARTS[r.drop.key].emoji} ${PARTS[r.drop.key].name}</b></p>`:'<p class="dim">Your salvage store is full.</p>'}
+        <p class="dim">No retreat from here — the only way out is through.</p>
+        <button class="btn primary" style="margin-top:10px;" onclick="continueGauntlet()">☠ Continue to Wave ${r.waveCleared+1} →</button>
+      </div>`;
+    }
+    return `
+    <div class="panel" style="text-align:center;">
+      <h1 class="title" style="font-size:20px; color:var(--danger);">THE GAUNTLET ENDS</h1>
+      <p>Your legion held for <b>${r.wavesCleared}</b> wave${r.wavesCleared===1?'':'s'}.</p>
+      ${r.isRecord?`<p style="color:var(--gold)">🏆 New personal best!</p>`:`<p class="dim">Personal best: Wave ${r.best}.</p>`}
+      <button class="btn primary" style="margin-top:10px;" onclick="endGauntlet()">Return to Hub →</button>
     </div>`;
   }
   if(r.win && r.finale && !r.redeploy){

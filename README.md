@@ -319,6 +319,18 @@ something to do even at zero — each of those already runs its own separate
 difficulty or scoring layer, the same boundary Mercenary Contract eligibility
 already draws.
 
+**The Gauntlet.** An endless survival mode off to the side of the campaign
+proper, unlocked once the finale's been cleared once: no story stage, no
+rewards pipeline, and no retreat once it starts — win a wave and the next,
+harder one comes immediately, and the run only ends when you lose. It costs
+a single flat Energy fee up front, however many waves you go on to clear,
+and reuses the Deep's already-endless scaling wholesale rather than
+inventing a second difficulty curve — wave N is just fought at Depth N. The
+only thing it keeps is one permanent number, the deepest wave this legion
+has ever cleared: a clean score to chase that's entirely independent of
+story stage, survives a Rebirth the same way Trophy Case's records do, and
+resets only for a brand-new legion.
+
 **Trophy Case.** A pure-fluff Hub screen that lays out the legion's best moments side
 by side — deepest Reach, longest win streak, the toughest Ace and Vanguard ever felled,
 and a per-theory tally of Archive findings. Deepest Reach and the Archive already kept
@@ -328,6 +340,17 @@ item with no memory of its own), so those three get one small high-water mark ap
 updated at the exact spot the ordinary version of the event already fires. Nothing
 here changes how anyone plays — it's just one place for a run's history to be looked
 at and admired.
+
+**Legion HQ.** A home-base screen sitting right alongside Trophy Case and Legion
+Identity, decorated with props this legion has actually earned — a felled Ace's
+trophy, a Vanguard's shield, a relic of the fallen gate, a shelf of every Archive
+fragment found — rather than anything new to grind for. Every prop's unlock
+condition just reads an existing permanent record (the same ones Trophy Case,
+Legion Banners and the Gauntlet already keep), and arranging up to six of them in
+the diorama is purely cosmetic, the same toggle-with-a-cap pattern the Legion
+Identity emblem picker already uses. Nothing here changes how a fight plays out —
+it's a natural place to eventually hang small passive perks, but this pass is
+display-only.
 
 **Monster Nicknames.** Rename any monster in the roster, and the game quietly keeps a
 few milestones for it — kills, times fielded, a near-death survival — as a line or two
@@ -439,7 +462,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-3013 assertions, no dependencies beyond `node`. The suites extract the script out of
+3094 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

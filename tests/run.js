@@ -94,6 +94,8 @@ const SUITES = [
   { label:'the-undercroft',     harness:'dom-storage-server.js', assert:true, files:['58-the-undercroft.js'] },
   { label:'mercenary-contract', harness:'dom-storage-server.js', assert:true, files:['59-mercenary-contract.js'] },
   { label:'energy',             harness:'dom-storage-server.js', assert:true, files:['60-energy.js'] },
+  { label:'the-gauntlet',       harness:'dom-storage-server.js', assert:true, files:['61-the-gauntlet.js'] },
+  { label:'legion-hq',          harness:'dom-storage-server.js', assert:true, files:['62-legion-hq.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

@@ -95,6 +95,8 @@ run field-companion     dom-storage-server.js "$H/assert.js" "$S/57-field-compan
 run the-undercroft      dom-storage-server.js "$H/assert.js" "$S/58-the-undercroft.js"
 run mercenary-contract  dom-storage-server.js "$H/assert.js" "$S/59-mercenary-contract.js"
 run energy              dom-storage-server.js "$H/assert.js" "$S/60-energy.js"
+run the-gauntlet        dom-storage-server.js "$H/assert.js" "$S/61-the-gauntlet.js"
+run legion-hq           dom-storage-server.js "$H/assert.js" "$S/62-legion-hq.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"
