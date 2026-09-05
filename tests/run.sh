@@ -93,6 +93,7 @@ run guild-projects      dom-storage-server.js "$H/assert.js" "$S/55-guild-projec
 run black-market        dom-storage-server.js "$H/assert.js" "$S/56-black-market.js"
 run field-companion     dom-storage-server.js "$H/assert.js" "$S/57-field-companion.js"
 run the-undercroft      dom-storage-server.js "$H/assert.js" "$S/58-the-undercroft.js"
+run mercenary-contract  dom-storage-server.js "$H/assert.js" "$S/59-mercenary-contract.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

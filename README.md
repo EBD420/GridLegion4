@@ -292,6 +292,18 @@ that opened the door in the first place. Built on the same one-time, anchored-
 stage plumbing as a Campaign Map Detour, just gated on corruption instead of on
 which stage you've cleared.
 
+**Mercenary Contract.** Spend salvage, rent a tribe Champion's raw strength for
+exactly one deployment, and it walks the instant that battle ends — a taste of
+power the legion never actually owns, in contrast to a Champion earned
+permanently through Tribe favor. No rotation or expiry clock like the Caravan
+or Black Market: a contract is on offer any time the salvage is there, stays
+pending across a save/reload since it's already paid for, and is spent on the
+very next real stage battle, win or lose. It never joins the roster, so it
+never counts toward the roster cap, never gains EXP or a nickname, and can
+never mint a permanent Battle-Forged Bond or a permanent Doctrine kill-leader
+credit for a species you never actually recruited — only the element it
+fought with reaches Rustbound intel, same as any real deployment.
+
 **Trophy Case.** A pure-fluff Hub screen that lays out the legion's best moments side
 by side — deepest Reach, longest win streak, the toughest Ace and Vanguard ever felled,
 and a per-theory tally of Archive findings. Deepest Reach and the Archive already kept
@@ -412,7 +424,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2875 assertions, no dependencies beyond `node`. The suites extract the script out of
+2931 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

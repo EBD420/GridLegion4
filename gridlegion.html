@@ -278,6 +278,7 @@
   .caravan-banner{ font-size:16px; color:var(--gold); border:1px dashed var(--gold); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,178,56,0.08); }
   .black-market-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .undercroft-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.10); }
+  .mercenary-banner{ font-size:16px; color:var(--earth); border:1px dashed var(--earth); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(214,162,92,0.10); }
   .threat-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .gauge-wrap{ margin-bottom:12px; }
   .gauge-label{ font-size:14px; color:var(--gold); margin-bottom:3px; }
@@ -1040,6 +1041,106 @@ function acceptBlackMarketTrade(){
   state.blackMarketNextEligible = Date.now() + BLACK_MARKET_MIN_GAP_MS;
   autosave();
   render();
+}
+
+/* ============ MERCENARY CONTRACT ============
+   Spend salvage, rent a tribe champion's raw strength for exactly one
+   battle, and it walks the moment that battle ends — a taste of power the
+   legion never actually owns, in contrast to a Champion earned permanently
+   through Tribe favor (see CHAMPIONS/championUnlocked above, which this
+   reuses wholesale rather than inventing a second cast of monsters — every
+   champion is already a real SPECIES entry, so computeStats/sprites/traits
+   all just work on one).
+
+   Unlike the Caravan or Black Market, there is no rotation and no expiry
+   clock — a contract is available to hire any time the player can afford
+   it. Hiring only reserves it (state.mercenary): it stays pending, and
+   survives a save/reload since real salvage was already spent on it, until
+   the very next battle that's actually eligible to use it
+   (mercenaryEligibleBattle — the same "a real fight in every other sense"
+   carve-out Reinforcements already draws, minus Reinforcements' own boss
+   exclusion, since a hired gun present from round one has none of
+   Reinforcements' fairness concerns about a shielded commander). Consumed
+   the instant it's fielded, win or lose — "one deployment" means the
+   deployment, not the outcome.
+
+   It never joins state.roster, so it never counts toward rosterCap(),
+   never survives as a real monster, and — because findMonster() will never
+   find its throwaway uid — is automatically invisible to every permanent
+   per-monster tracker: EXP, kills, codex, nicknames, timesFielded/
+   closeCalls. Its species is deliberately excluded from the killsBySpecies
+   credit that feeds Doctrine's permanent kill-leader tally (see the
+   isMercenary guard beside every killsBySpecies write below) and from
+   Battle-Forged Bonds (recordBattleBonds never sees it) — a rented
+   champion must never quietly mint a permanent bond or a permanent "kill
+   leader" title for a species the player never actually recruited. Only
+   the element it fights with counts toward elemDamage (and so Rustbound
+   intel/adaptation and Doctrine's element tally) — a real, in-fiction
+   consequence of the specialist you hired, not a species-identity leak.
+
+   It also skips every whole-legion bonus buildPlayerUnits() layers on for
+   a real deployed monster — blessings, Council options, Rebirth's
+   multiplier, the mentor/battle-bond passives — on purpose: those are
+   earned by the legion over time, and a rental was never part of it. What
+   you're paying for is the flat MERCENARY_STAT_MULT and the level lead
+   below, nothing the legion has built compounds on top of it.
+   ============================================= */
+const MERCENARY_PART_COST = 4;     // salvage parts spent to hire — steeper than a permanent recruit's 3
+const MERCENARY_MIN_LEVEL = 8;
+const MERCENARY_LEVEL_BONUS = 6;   // hired at Lv. stage+6 (floor 8) — always well ahead of a fresh recruit
+const MERCENARY_STAT_MULT = 1.3;   // "genuinely strong" — a real cut above a same-level monster
+function mercenaryOptions(){
+  return TRIBE_IDS.map(e=>({ speciesId: CHAMPIONS[e].id, name: CHAMPIONS[e].name, emoji: CHAMPIONS[e].emoji, element: e }));
+}
+function mercenaryLevel(){ return Math.max(MERCENARY_MIN_LEVEL, state.stage + MERCENARY_LEVEL_BONUS); }
+function canHireMercenary(){ return !state.mercenary && state.parts.length>=MERCENARY_PART_COST; }
+function mercenaryPendingText(){
+  const h = state.mercenary; if(!h) return null;
+  const opt = mercenaryOptions().find(o=>o.speciesId===h.speciesId);
+  return `${opt?opt.emoji+' ':''}<b>${opt?escapeHtml(opt.name):'Unknown'}</b> (Lv.${h.level}) is on retainer — fights your next real battle, then the contract's done.`;
+}
+function hireMercenary(speciesId){
+  if(!canHireMercenary()) return;
+  if(CHAMPION_IDS.indexOf(speciesId)<0) return;
+  state.parts.splice(0, MERCENARY_PART_COST);
+  state.mercenary = { speciesId, level: mercenaryLevel() };
+  autosave();
+  render();
+}
+/* Same exclusion list Reinforcements uses for fairness/scope (a Duel is a
+   formation-vs-formation fair fight, raids/World Boss/Guild War and Trials
+   each already run their own separate difficulty/scoring layer, and the
+   tutorial is a fixed scripted scouting pair) — minus Reinforcements' own
+   boss exclusion, since a mercenary stands in the line from round one
+   rather than being sprung mid-fight. */
+function mercenaryEligibleBattle(){
+  return !state.duel && !state.raidRun && !state.worldBossRun && !state.guildWarRun && !state.trial && !tutorialActive();
+}
+/* Built the same way buildPlayerUnits() builds a real monster's unit —
+   right down to running it through newMonster()/computeStats() — except
+   this monster is never pushed to state.roster, and its base stats get the
+   flat MERCENARY_STAT_MULT bump on top. Returns null if the pending
+   contract somehow names a non-champion (should never happen — hireMercenary
+   already validates against CHAMPION_IDS — but beginBattle() checks anyway
+   rather than trusting a save file that could have been hand-edited). */
+function buildMercenaryUnit(terrain){
+  const hire = state.mercenary;
+  if(!hire || CHAMPION_IDS.indexOf(hire.speciesId)<0) return null;
+  const m = newMonster(hire.speciesId, hire.level, 1);
+  const st = computeStats(m);
+  const tier = corrTier(st.corruption);
+  const unit = Object.assign(baseUnitDefaults(), {
+    id:'p_merc_'+m.uid, side:'player', row:'front', monsterUid:m.uid, level:m.level, speciesId:m.speciesId,
+    name:st.name, emoji:st.emoji, sprite:st.sprite, element:st.element, elements:st.elements.slice(),
+    attackElements:st.innate.slice(), hybrid:st.hybrid, skillName:st.skill,
+    bHp:Math.round(st.hp*MERCENARY_STAT_MULT), bAtk:Math.round(st.atk*MERCENARY_STAT_MULT),
+    bDef:Math.round(st.def*MERCENARY_STAT_MULT), bSpd:Math.round(st.spd*MERCENARY_STAT_MULT),
+    skillCd:0, skillMaxCd:3, fainted:false,
+    corruption: st.corruption, glitchChance: tier.glitch, defectChance: tier.defect,
+    trait: st.trait, isMercenary:true,
+  });
+  applyTerrainToUnit(unit, terrain);
+  return unit;
 }
 
 /* ============ FIELD COMPANION ============
@@ -2268,6 +2369,7 @@ function serializeSave(){
     caravanNextEligible: state.caravanNextEligible,
     blackMarket: state.blackMarket,
     blackMarketNextEligible: state.blackMarketNextEligible,
+    mercenary: state.mercenary,
     companion: state.companion,
     undercroftClaimed: state.undercroftClaimed,
     undercroftWard: state.undercroftWard,
@@ -2518,6 +2620,16 @@ function applySave(d, slot){
       && typeof d.blackMarket.expiresAt==='number' && isFinite(d.blackMarket.expiresAt))
     ? { key: d.blackMarket.key, expiresAt: d.blackMarket.expiresAt } : null;
   state.blackMarketNextEligible = (typeof d.blackMarketNextEligible==='number' && isFinite(d.blackMarketNextEligible)) ? d.blackMarketNextEligible : 0;
+  /* Mercenary Contract: a paid-for, pending hire — persisted (unlike the
+     mid-battle-only state.undercroft/state.detour flags) since real salvage
+     was already spent on it. Only a real champion id with a sane positive
+     level survives; anything else is salvage already spent with nothing to
+     show for it, so it degrades to null rather than quietly resurrecting a
+     free contract off a garbage level. */
+  state.mercenary = (d.mercenary && typeof d.mercenary==='object'
+      && CHAMPION_IDS.indexOf(d.mercenary.speciesId)>=0
+      && typeof d.mercenary.level==='number' && isFinite(d.mercenary.level) && d.mercenary.level>0)
+    ? { speciesId: d.mercenary.speciesId, level: Math.floor(d.mercenary.level) } : null;
   /* Field Companion: unlike the Caravan/Black Market offers, every legion
      always has exactly one — so malformed or missing data degrades to a
      freshly rolled companion at xp 0, never to null. */
@@ -2825,6 +2937,7 @@ function initGame(){
   state.caravanNextEligible = Date.now() + CARAVAN_MIN_GAP_MS;
   state.blackMarket = null;
   state.blackMarketNextEligible = Date.now() + BLACK_MARKET_MIN_GAP_MS;
+  state.mercenary = null;
   state.bestStreak = 0;
   state.trophyAce = null;
   state.trophyVanguard = null;
@@ -4101,6 +4214,15 @@ function renderHub(){
       Your legion's own corruption has opened a way down — a much tougher fight waits below. Win it once and earn a permanent Corruption Ward.<br>
       <button class="btn small" style="margin-top:4px; border-color:var(--wind); color:var(--wind);" onclick="beginUndercroft()">Descend</button>
     </div>` : ''}
+    ${mercenaryPendingText() ? `<div class="mercenary-banner">🗡️ <b>MERCENARY CONTRACT</b><br>
+      ${mercenaryPendingText()}
+    </div>` : `<div class="mercenary-banner">🗡️ <b>MERCENARY CONTRACT</b><br>
+      Rent a tribe champion's raw strength for one fight — no favor earned, no roster slot spent, gone the moment the battle ends (${MERCENARY_PART_COST} salvage).<br>
+      <div class="row" style="gap:4px; margin-top:4px; flex-wrap:wrap;">
+        ${mercenaryOptions().map(o=>`<button class="btn small" ${canHireMercenary()?'':'disabled'} style="border-color:var(--earth); color:var(--earth);" onclick="hireMercenary('${o.speciesId}')">${o.emoji} ${escapeHtml(o.name)}</button>`).join('')}
+      </div>
+      ${canHireMercenary()?'':`<span class="dim">Needs ${MERCENARY_PART_COST} salvage parts (have ${state.parts.length}).</span>`}
+    </div>`}
     ${AUGMENT_IDS.some(hasAugment) ? `<p class="dim">🎴 Augments: ${AUGMENT_IDS.filter(hasAugment).map(id=>AUGMENTS[id].name).join(', ')}</p>` : ''}
     ${(function(){ const c=companionInfo(); return c ? `<p class="dim">${c.emoji} <b>${escapeHtml(c.name)}</b> (Lv.${c.level}) — ${companionPerkText(c)}</p>` : ''; })()}
     ${state.loginStreak>0 ? `<p class="dim">📅 Login streak: <b style="color:var(--gold)">${state.loginStreak}</b> day${state.loginStreak===1?'':'s'} running${state.bestLoginStreak>state.loginStreak?` (best ${state.bestLoginStreak})`:''}</p>` : ''}
@@ -5917,7 +6039,8 @@ function applyBattleBonds(units){
    survived to see the win shares one more fight together. */
 function recordBattleBonds(survivors){
   state.bondCounts = state.bondCounts || {};
-  const withSpecies = survivors.filter(u=>u.speciesId);
+  // A hired Mercenary never mints a permanent bond — see MERCENARY CONTRACT above.
+  const withSpecies = survivors.filter(u=>u.speciesId && !u.isMercenary);
   for(let i=0;i<withSpecies.length;i++){
     for(let j=i+1;j<withSpecies.length;j++){
       const key = bondPairKey(withSpecies[i].speciesId, withSpecies[j].speciesId);
@@ -6999,6 +7122,16 @@ function beginBattle(){
   const platingElem = adapted || (hasMod('hardened') ? deployedDominantElement() : null);
   const usePlating = (platingActive() || hasMod('hardened')) && !!platingElem;
   const playerUnits = buildPlayerUnits(terrain);   // reads state.gambit.picked internally, if set
+  let mercenaryFielded = null;
+  if(state.mercenary && mercenaryEligibleBattle()){
+    const mercUnit = buildMercenaryUnit(terrain);
+    if(mercUnit){
+      playerUnits.push(mercUnit);
+      mercenaryFielded = { speciesId: mercUnit.speciesId, name: mercUnit.name, emoji: mercUnit.emoji };
+      refreshSynergies(playerUnits, true);   // recompute now that the mercenary has joined the line
+    }
+    state.mercenary = null;   // spent the instant it's fielded — one deployment, win or lose
+  }
   const duel = state.duel;
   const gambitId = (state.gambit && state.gambit.picked) || null;
   state.gambit = null;   // one-time: already folded into playerUnits above and state.battle.gambit below
@@ -7021,6 +7154,7 @@ function beginBattle(){
     lowestSurvivorId: null,
     gambit: gambitId,
     reinforced: false,
+    mercenary: mercenaryFielded,
     benchAtStart: benchRoster().map(m=>m.uid),
   };
   state.battle.synLabels = {
@@ -7410,7 +7544,7 @@ function applyDamage(attacker, defender, isSkill){
     onEnemyFainted(defender);
     if(attacker.side==='player'){
       state.battle.lastKillId = attacker.id;
-      if(attacker.speciesId){
+      if(attacker.speciesId && !attacker.isMercenary){
         const kb = state.battle.killsBySpecies || (state.battle.killsBySpecies = {});
         kb[attacker.speciesId] = (kb[attacker.speciesId]||0) + 1;
       }
@@ -7508,7 +7642,7 @@ function applyCascadeOverflow(attacker, target, overflow, strikeElem){
     onEnemyFainted(target);
     if(attacker.side==='player'){
       state.battle.lastKillId = attacker.id;
-      if(attacker.speciesId){
+      if(attacker.speciesId && !attacker.isMercenary){
         const kb = state.battle.killsBySpecies || (state.battle.killsBySpecies = {});
         kb[attacker.speciesId] = (kb[attacker.speciesId]||0) + 1;
       }
@@ -8311,6 +8445,12 @@ function endBattle(result){
       state.lastResult.undercroftReward = `☣ Corruption Ward earned — the whole legion runs ${UNDERCROFT_WARD_REDUCTION} rust cooler, permanently.`;
     }
   }
+  // Mercenary Contract: the hire was already consumed in beginBattle() the
+  // instant it was fielded — this just carries the flavor through to the
+  // result screen, win or lose, same as Detour/Undercroft above.
+  if(b.mercenary && state.lastResult){
+    state.lastResult.mercenary = b.mercenary;
+  }
   const cmdLevelled = commanderAddXp(result==='win' ? (20 + state.stage*2) : (5 + Math.floor(state.stage/2)));
   if(cmdLevelled && state.lastResult) state.lastResult.commanderLevel = cmdLevelled;
   const fieldPromoNotes = applyFieldPromotions();
@@ -8481,6 +8621,7 @@ function renderUnit(u, activeId, validTargetIds){
     ${u.isAce?`<div class="shield-tag" style="background:var(--gold); color:#241a02;" title="Rustbound Ace — noticeably tougher than its squadmates">⭐ ACE</div>`:''}
     ${u.isVanguard?`<div class="shield-tag" style="background:var(--danger); color:#2a0410;" title="Vanguard — clear its escort first and it drops a unique trophy when it finally falls">🛡️ VANGUARD</div>`:''}
     ${u.isReinforcement?`<div class="shield-tag" style="background:var(--gold); color:#3a2a00;" title="Reinforcement — rushed in when the fight dragged on too long">🚨 REINFORCEMENT</div>`:''}
+    ${u.isMercenary?`<div class="shield-tag" style="background:var(--earth); color:#2a1a06;" title="Mercenary Contract — a rented tribe champion, fighting this one battle only">🗡️ MERCENARY</div>`:''}
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
     ${u.trait&&!u.corruption?`<div class="rust-tag" style="color:var(--volt)" title="${traitName(u.trait)}: ${traitDesc(u.trait)}">${TRAITS[u.trait.key].emoji}</div>`:''}
@@ -8733,6 +8874,7 @@ function renderResult(){
       <div class="storytext">But the gate opened onto a stairwell, and the stairwell goes down. Whatever built the horde is still down there, still building.</div>
       <p class="dim">Your legion, its salvage and every splice carry onward. The Deep scales without end: elite waves every fifth depth, richer wreckage, and recruits enough to finish an evolution ladder.</p>
       ${(r.fieldPromotions && r.fieldPromotions.length) ? `<p class="dim" style="font-size:14px;">🎓 ${r.fieldPromotions.map(escapeHtml).join(' · ')}</p>` : ''}
+      ${r.mercenary?`<p class="dim" style="font-size:14px;">🗡️ Mercenary Contract — ${r.mercenary.emoji} <b>${escapeHtml(r.mercenary.name)}</b> fought this battle, then walked. The contract's done.</p>`:''}
       <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
       <div class="row" style="justify-content:center; margin-top:14px;">
         <button class="btn primary" style="font-size:22px;" onclick="advanceStage()">⬇ DESCEND INTO THE DEEP</button>
@@ -8748,6 +8890,7 @@ function renderResult(){
       <h1 class="title" style="font-size:20px;">${r.boss?'COMMANDER DOWN!':(r.elite?'ELITE WAVE BROKEN!':'VICTORY!')}</h1>
       ${r.redeploy?`<p class="dim" style="font-size:14px;">🔁 Redeployment — your place at the frontier is untouched.</p>`:''}
       ${r.detour?`<p class="dim" style="font-size:14px;">🧭 Detour — ${escapeHtml(r.detourName||'')} — your place at the frontier is untouched.</p>`:''}
+      ${r.mercenary?`<p class="dim" style="font-size:14px;">🗡️ Mercenary Contract — ${r.mercenary.emoji} <b>${escapeHtml(r.mercenary.name)}</b> fought this battle, then walked. The contract's done.</p>`:''}
       ${r.boss?`<p style="color:var(--danger)">${escapeHtml(r.boss)} is scrap.</p>`:''}
       <p>Your legion held the line at ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`}.</p>
       <p class="dim">Each deployed monster gained ${r.expGain} EXP.</p>
@@ -8773,6 +8916,7 @@ function renderResult(){
     <h1 class="title" style="font-size:20px; color:var(--danger);">DEFEAT</h1>
     ${r.redeploy?`<p class="dim" style="font-size:14px;">🔁 Redeployment — your place at the frontier is untouched.</p>`:''}
     ${r.detour?`<p class="dim" style="font-size:14px;">🧭 Detour — ${escapeHtml(r.detourName||'')} — your place at the frontier is untouched.</p>`:''}
+    ${r.mercenary?`<p class="dim" style="font-size:14px;">🗡️ Mercenary Contract — ${r.mercenary.emoji} <b>${escapeHtml(r.mercenary.name)}</b> fought this battle, then walked. The contract's done.</p>`:''}
     <p>Your legion was overrun. The Rustbound advance no further today, but neither do you.</p>
     <p class="dim">Your survivors studied the enemy through the rout — each deployed monster gained ${r.expGain} EXP.</p>
     ${r.levelled && r.levelled.length ? `<p style="color:var(--gold)">⬆ Level up: ${r.levelled.join(', ')}</p>` : ''}

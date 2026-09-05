@@ -92,6 +92,7 @@ const SUITES = [
   { label:'black-market',       harness:'dom-storage-server.js', assert:true, files:['56-black-market.js'] },
   { label:'field-companion',    harness:'dom-storage-server.js', assert:true, files:['57-field-companion.js'] },
   { label:'the-undercroft',     harness:'dom-storage-server.js', assert:true, files:['58-the-undercroft.js'] },
+  { label:'mercenary-contract', harness:'dom-storage-server.js', assert:true, files:['59-mercenary-contract.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;
