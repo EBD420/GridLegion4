@@ -113,6 +113,7 @@ ok('a genuinely fresh legion clears the chart back to nothing (via the existing 
 
 console.log('\n[186] navigation and the Hub button');
 startGame();
+hubTab='progress';
 let hubHtml = renderHub();
 ok('the Hub carries a Depth Chart button', hubHtml.indexOf('🗺 Depth Chart')>=0);
 state.screen = 'hub';

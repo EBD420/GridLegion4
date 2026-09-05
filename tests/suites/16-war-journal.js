@@ -139,6 +139,7 @@ ok('empty state renders a hint', /Nothing recorded yet/.test(emptyHtml));
 state.journal = [{id:'x',stage:3,deep:false,win:true,boss:null,text:'A clean fight — no close calls.',at:Date.now()}];
 const filledHtml = renderJournal();
 ok('an entry renders its text', filledHtml.indexOf('A clean fight')>=0);
+hubTab='progress';
 ok('the hub shows the journal button', renderHub().indexOf('War Journal')>=0);
 
 console.log('\n================ '+pass+' passed, '+fail+' failed ================');

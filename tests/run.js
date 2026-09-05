@@ -86,6 +86,8 @@ const SUITES = [
   { label:'battle-replays',     harness:'dom-storage-server.js', assert:true, files:['50-battle-replays.js'] },
   { label:'world-boss',         harness:'dom-storage-server.js', assert:true, files:['51-world-boss.js'] },
   { label:'guild-wars',         harness:'dom-storage-server.js', assert:true, files:['52-guild-wars.js'] },
+  { label:'hub-tabs',           harness:'dom-storage-server.js', assert:true, files:['53-hub-tabs.js'] },
+  { label:'replay-playback',    harness:'dom-storage-server.js', assert:true, files:['54-replay-playback.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

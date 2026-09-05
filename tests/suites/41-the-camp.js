@@ -227,6 +227,7 @@ goCamp();
 ok('goCamp opens the Camp screen directly (used by the Hub button, no bonus attached)', state.screen==='camp' && state.campWelcome===null);
 
 startGame();
+hubTab='campaign';
 let hubHtml = renderHub();
 ok('the Camp button is on the Hub even for a totally fresh legion with nothing cleared yet', hubHtml.indexOf('The Camp')>=0 && hubHtml.indexOf('onclick="goCamp()"')>=0);
 

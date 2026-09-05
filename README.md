@@ -317,6 +317,16 @@ War Journal entry. Up to ten are kept locally, oldest dropped first, and any of 
 can be shared to a small public feed the rest of the server can browse — one-way and
 opt-in, nothing is shared automatically.
 
+**Replay Playback.** Any replay recorded since this feature shipped — yours or
+someone else's off the shared feed — can be watched turn by turn instead of read as a
+highlight line. A structured action log rides alongside the usual prose log during
+battle, and a snapshot of both full rosters at full HP is captured with it, so
+pressing **Watch** on a replay card rebuilds the fight in the same unit cards and
+attack animations the live battle uses — Play, Pause, single-Step, Restart, and a
+1×/2× speed toggle, no rewind. Older replays captured before this shipped, or a
+shared row a future update tampers with, are recognized and degrade honestly (the
+card just says no full playback was recorded) rather than crashing.
+
 **World Boss.** A single shared monster, server-wide rather than per-guild, with a
 big HP pool that scales up each time one falls. Any signed-in commander can summon
 one when none is active and take a normal battle against it; the damage that fight
@@ -332,6 +342,12 @@ nobody waits twice. Every battle fought while a war is active reports its score 
 your guild's side instead of the campaign — a win worth more than a loss, but a loss
 still counts for something — and once the clock runs out, the higher score wins,
 visible to both sides with an honest draw if it's ever exactly tied.
+
+**Hub.** With this many systems, the home screen is grouped into five tabs — Legion,
+Records, Campaign, Online, Settings — instead of one long wall of buttons. The
+banners above the tabs (story text, terrain, Intel, Doctrine, the Caravan, augment
+picks, login streak) and the Deploy-to-Battle panel below them stay put regardless of
+which tab is open; only the button grid switches.
 
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
 council vote, a shared raid boss and a server-wide World Boss, an asynchronous PvP
@@ -358,7 +374,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2561 assertions, no dependencies beyond `node`. The suites extract the script out of
+2660 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

@@ -34,6 +34,7 @@ ok('one detour of each reward type — favor, part, lore', ['favor','part','lore
 
 console.log('\n[251] the Hub button is unconditional, and availability tracks state.cleared / claimed');
 startGame();
+hubTab='campaign';
 let hubHtml = renderHub();
 ok('the Campaign Map button is always on the Hub, even with nothing cleared yet', hubHtml.indexOf('Campaign Map')>=0);
 clearStages([]);

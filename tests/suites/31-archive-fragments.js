@@ -130,6 +130,7 @@ ok('a discovered fragment shows its real text (HTML-escaped like every other nam
 ok('a clean plurality names its leading theory', archiveHtml.indexOf('Leading theory: '+ARCHIVE_THEORIES.builders.name)>=0);
 ok("and shows that theory's blurb", archiveHtml.indexOf(ARCHIVE_THEORIES.builders.blurb)>=0);
 
+hubTab='progress';
 let hubHtml = renderHub();
 ok('the Hub button reflects the live fragment count', hubHtml.indexOf('📜 Archive (3/'+ARCHIVE_FRAGMENTS.length+')')>=0, hubHtml);
 

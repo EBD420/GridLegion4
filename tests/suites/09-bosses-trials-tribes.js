@@ -67,6 +67,7 @@ ok('no trials before anything is cleared', clearedStages().length===0);
 ok('trials screen says so', /Clear a stage first/.test(renderTrials()));
 state.cleared={3:true, 7:true};
 ok('cleared stages are listed', clearedStages().join()==='3,7');
+hubTab='campaign';
 ok('hub offers trials once something is cleared', /Trials \(2\)/.test(renderHub()));
 state.trialPick={stage:7, mods:[]};
 ok('reward scales with stage', trialReward(30) > trialReward(3), trialReward(3)+' -> '+trialReward(30));

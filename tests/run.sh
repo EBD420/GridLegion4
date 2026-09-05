@@ -87,6 +87,8 @@ run attendance-banners  dom-storage-server.js "$H/assert.js" "$S/49-attendance-b
 run battle-replays      dom-storage-server.js "$H/assert.js" "$S/50-battle-replays.js"
 run world-boss          dom-storage-server.js "$H/assert.js" "$S/51-world-boss.js"
 run guild-wars          dom-storage-server.js "$H/assert.js" "$S/52-guild-wars.js"
+run hub-tabs            dom-storage-server.js "$H/assert.js" "$S/53-hub-tabs.js"
+run replay-playback     dom-storage-server.js "$H/assert.js" "$S/54-replay-playback.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

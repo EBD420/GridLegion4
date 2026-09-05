@@ -1926,7 +1926,8 @@ function shareReplay(localId){
     user_id: cloud.session.user.id,
     display_name: legionBanner(),
     data: { kind:rep.kind, label:rep.label, stage:rep.stage, deep:rep.deep, boss:rep.boss,
-            power:rep.power, formation:rep.formation, highlights:rep.highlights, at:rep.at },
+            power:rep.power, formation:rep.formation, highlights:rep.highlights, at:rep.at,
+            log:rep.log||[], roster:rep.roster||null },
     created_at: new Date().toISOString(),
   };
   return authed('/rest/v1/replays', {
@@ -2268,7 +2269,7 @@ function applySave(d, slot){
      BATTLE REPLAYS block below) — revived the same defensive way as the
      War Journal above, since it round-trips through the same save file. */
   state.replays = reviveReplays(d.replays);
-  state.battle = null; state.lastResult = null; state.lastFusion = null;
+  state.battle = null; state.playback = null; state.lastResult = null; state.lastFusion = null;
   state.formSelected = null; state.selectedPart = null; state.campWelcome = null; state.renamingUid = null;
   fuseSelection = [];
   return true;
@@ -2434,6 +2435,7 @@ let state = {
   saveState: 'none',
   transfer: null,
   battle: null,
+  playback: null,
   lastResult: null,
   rebirth: { count: 0 },
   confirmRebirth: null,
@@ -3340,6 +3342,7 @@ function render(){
   else if(state.screen==='depthchart') app.innerHTML = renderDepthChart();
   else if(state.screen==='trophycase') app.innerHTML = renderTrophyCase();
   else if(state.screen==='replays') app.innerHTML = renderReplays();
+  else if(state.screen==='replaywatch') app.innerHTML = renderReplayPlayback();
   else if(state.screen==='gambit') app.innerHTML = renderGambit();
   else if(state.screen==='augment') app.innerHTML = renderAugmentDraft();
   else if(state.screen==='commander') app.innerHTML = renderCommanderRank();
@@ -3684,6 +3687,7 @@ function bossBannerHtml(bd){
 }
 
 /* ============ HUB ============ */
+let hubTab = 'legion';
 function renderHub(){
   ensureAttendance();
   checkBadgeUnlocks();
@@ -3726,6 +3730,52 @@ function renderHub(){
     </div>`;
   }
 
+  const HUB_TABS = [
+    { id:'legion', label:'⚔ Legion', buttons: [
+      `<button class="btn" onclick="goRoster()">📋 Roster & Fusion (${state.roster.length})</button>`,
+      `<button class="btn" onclick="goFormation()">⚔ Formation (${filled}/6)</button>`,
+      `<button class="btn rust" onclick="goSalvage()">⚙ Salvage Bay (${state.parts.length})</button>`,
+      `<button class="btn rust" onclick="goForge()">🔨 The Forge</button>`,
+      `<button class="btn" onclick="goTribes()">🏕 Tribes${activeBlessing()?' ★':''}</button>`,
+      `<button class="btn small" onclick="goLegionId()">🎖 Identity</button>`,
+    ]},
+    { id:'progress', label:'📖 Records', buttons: [
+      `<button class="btn" onclick="goCodex()">📖 Bestiary (${codexProgress().pct}%)</button>`,
+      `<button class="btn" onclick="goArchive()">📜 Archive (${archiveFoundCount()}/${ARCHIVE_FRAGMENTS.length})</button>`,
+      `<button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>`,
+      `<button class="btn" onclick="goDepthChart()">🗺 Depth Chart</button>`,
+      `<button class="btn" onclick="goTrophyCase()">🏆 Trophy Case</button>`,
+      `<button class="btn" onclick="goReplays()">🎬 Replays${state.replays&&state.replays.length?' ('+state.replays.length+')':''}</button>`,
+      `<button class="btn small" onclick="goCommanderRank()">🎖 Commander Rank ${commander.level}</button>`,
+    ]},
+    { id:'campaign', label:'🧭 Campaign', buttons: [
+      `<button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>`,
+      clearedStages().length?`<button class="btn" onclick="goTrials()">☠ Trials (${clearedStages().length})</button>`:'',
+      clearedStages().length?`<button class="btn" onclick="goRedeploy()">🔁 Redeployment (${clearedStages().length})</button>`:'',
+      `<button class="btn" onclick="goCampaignMap()">🧭 Campaign Map</button>`,
+      `<button class="btn" onclick="goCamp()">⛺ The Camp</button>`,
+    ]},
+    { id:'online', label:'📡 Online', buttons: [
+      `<button class="btn small" onclick="goGuild()">🛡 Guild</button>`,
+      `<button class="btn small" onclick="goLadder()">🏆 Ladder</button>`,
+      `<button class="btn small" onclick="goOnline()">📡 Online Now</button>`,
+      `<button class="btn small" onclick="goWorldBoss()">☠ World Boss</button>`,
+    ]},
+    { id:'settings', label:'⚙ Settings', buttons: [
+      `<button class="btn small audio-btn" onclick="toggleTactical()">${state.tactical?'🧠 Tactical':'⚡ Live'}</button>`,
+      `<button class="btn small audio-btn" onclick="toggleSfx()">${audio.sfx?'🔊':'🔇'} SFX</button>`,
+      `<button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>`,
+      `<button class="btn small" onclick="manualSave()">💾 Save</button>`,
+      `<button class="btn small" onclick="goTransfer()">🔗 Transfer Code</button>`,
+      `<button class="btn small" onclick="leaveToProfiles()">👥 Legions</button>`,
+      cloudConfigured()?`<button class="btn small" onclick="goAccount()">👤 Account</button>`:'',
+    ]},
+  ];
+  if(!HUB_TABS.some(t=>t.id===hubTab)) hubTab='legion';
+  const tabBar = HUB_TABS.map(t=>`<button class="btn small ${hubTab===t.id?'primary':''}" onclick="hubTab='${t.id}'; render();">${t.label}</button>`).join('');
+  const activeTab = HUB_TABS.find(t=>t.id===hubTab);
+  const activeButtons = activeTab.buttons.filter(Boolean).join('');
+
   return `
   <div class="panel">
     <h2 class="section">${deep ? `THE DEEP — DEPTH ${deepDepth(state.stage)}` : `STAGE ${state.stage} / ${CAMPAIGN_LENGTH}`}</h2>
@@ -3742,38 +3792,11 @@ function renderHub(){
     </div>` : ''}
     ${AUGMENT_IDS.some(hasAugment) ? `<p class="dim">🎴 Augments: ${AUGMENT_IDS.filter(hasAugment).map(id=>AUGMENTS[id].name).join(', ')}</p>` : ''}
     ${state.loginStreak>0 ? `<p class="dim">📅 Login streak: <b style="color:var(--gold)">${state.loginStreak}</b> day${state.loginStreak===1?'':'s'} running${state.bestLoginStreak>state.loginStreak?` (best ${state.bestLoginStreak})`:''}</p>` : ''}
-    <div class="row" style="margin-top:14px;">
-      <button class="btn" onclick="goRoster()">📋 Roster & Fusion (${state.roster.length})</button>
-      <button class="btn" onclick="goFormation()">⚔ Formation (${filled}/6)</button>
-      <button class="btn rust" onclick="goSalvage()">⚙ Salvage Bay (${state.parts.length})</button>
-      <button class="btn rust" onclick="goForge()">🔨 The Forge</button>
-      <button class="btn" onclick="goTribes()">🏕 Tribes${activeBlessing()?' ★':''}</button>
-      <button class="btn" onclick="goCodex()">📖 Bestiary (${codexProgress().pct}%)</button>
-      <button class="btn" onclick="goArchive()">📜 Archive (${archiveFoundCount()}/${ARCHIVE_FRAGMENTS.length})</button>
-      <button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>
-      ${clearedStages().length?`<button class="btn" onclick="goTrials()">☠ Trials (${clearedStages().length})</button>`:''}
-      ${clearedStages().length?`<button class="btn" onclick="goRedeploy()">🔁 Redeployment (${clearedStages().length})</button>`:''}
-      <button class="btn" onclick="goCampaignMap()">🧭 Campaign Map</button>
-      <button class="btn" onclick="goCamp()">⛺ The Camp</button>
-      <button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>
-      <button class="btn" onclick="goDepthChart()">🗺 Depth Chart</button>
-      <button class="btn" onclick="goTrophyCase()">🏆 Trophy Case</button>
-      <button class="btn" onclick="goReplays()">🎬 Replays${state.replays&&state.replays.length?' ('+state.replays.length+')':''}</button>
-      <button class="btn" onclick="goCommanderRank()">🎖 Commander Rank ${commander.level}</button>
-    </div>
-    <div class="row" style="margin-top:10px; align-items:center;">
-      <button class="btn small" onclick="goGuild()">🛡 Guild</button>
-      <button class="btn small" onclick="goLadder()">🏆 Ladder</button>
-      <button class="btn small" onclick="goOnline()">📡 Online Now</button>
-      <button class="btn small" onclick="goWorldBoss()">☠ World Boss</button>
-      <button class="btn small audio-btn" onclick="toggleTactical()">${state.tactical?'🧠 Tactical':'⚡ Live'}</button>
-      <button class="btn small audio-btn" onclick="toggleSfx()">${audio.sfx?'🔊':'🔇'} SFX</button>
-      <button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>
-      <button class="btn small" onclick="manualSave()">💾 Save</button>
-      <button class="btn small" onclick="goTransfer()">🔗 Transfer Code</button>
-      <button class="btn small" onclick="goLegionId()">🎖 Identity</button>
-      <button class="btn small" onclick="leaveToProfiles()">👥 Legions</button>
-      ${cloudConfigured()?`<button class="btn small" onclick="goAccount()">👤 Account</button>`:''}
+  </div>
+  <div class="panel">
+    <div class="row" style="gap:6px;">${tabBar}</div>
+    <div class="row" style="margin-top:12px;">${activeButtons}</div>
+    <div class="row" style="margin-top:14px; align-items:center; border-top:1px solid var(--border); padding-top:10px;">
       <span class="dim" style="font-size:15px;">${saveStatusText()}</span>
     </div>
   </div>
@@ -5880,6 +5903,28 @@ function toggleBadge(k){
 const REPLAY_CAP = 10;
 const REPLAY_KINDS = ['boss','streak','depth'];
 function replayEmoji(kind){ return kind==='boss' ? '💀' : (kind==='streak' ? '🔥' : '🗺️'); }
+/* Trims one live battle unit down to exactly what Replay Playback needs to
+   redraw it later (renderUnit()/unitSpriteHtml()/statusIconLine() — see
+   REPLAY PLAYBACK below) — not the full battle-only fields (bAtk/skillCd/
+   status/etc.) a live fight also carries, which playback never touches. */
+function snapshotReplayUnit(u){
+  return {
+    id: u.id, side: u.side, row: u.row,
+    name: u.name, emoji: u.emoji||'', sprite: u.sprite||null,
+    element: u.element||null, elements: Array.isArray(u.elements) ? u.elements.slice(0,2) : [],
+    maxHp: u.maxHp,
+    isBoss: !!u.isBoss, isGenerator: !!u.isGenerator, isAce: !!u.isAce,
+    isVanguard: !!u.isVanguard, isReinforcement: !!u.isReinforcement,
+    plating: u.plating || null, corruption: u.corruption || 0,
+    trait: u.trait ? { key:u.trait.key, elem:u.trait.elem } : null,
+  };
+}
+function snapshotReplayRoster(b){
+  return {
+    player: (b.playerUnits||[]).map(snapshotReplayUnit),
+    enemy: (b.enemyUnits||[]).map(snapshotReplayUnit),
+  };
+}
 function captureReplay(kind, label){
   if(!state.battle) return;
   const entry = state.journal && state.journal[0];
@@ -5891,6 +5936,8 @@ function captureReplay(kind, label){
     boss: bossForStage(state.stage) ? bossForStage(state.stage).name : null,
     power: formationPower(), formation: ladderSnapshot(),
     highlights, at: Date.now(), shared: false,
+    log: (state.battle.actionLog||[]).slice(0, REPLAY_LOG_CAP),
+    roster: snapshotReplayRoster(state.battle),
   };
   state.replays = Array.isArray(state.replays) ? state.replays : [];
   state.replays.unshift(rep);
@@ -5912,6 +5959,52 @@ function reviveReplayFormation(f){
   return { units, blessing: (typeof f.blessing==='string') ? f.blessing.slice(0,20) : null,
            stage: (typeof f.stage==='number' && f.stage>=1) ? Math.floor(f.stage) : 1 };
 }
+/* ---- Replay Playback revival: same "never trust stored data" treatment
+   as reviveReplayFormation above, applied to both local saves AND — since
+   a shared community replay's `data` column is any signed-in player's own
+   insert, never actually validated server-side beyond RLS ownership — the
+   remote case too. Every field is re-checked against the live tables
+   (SPRITE_SHAPES/TRAITS/PARTICLE_ELEMS) exactly the way a sprite pulled out
+   of localStorage already is via reviveSpriteRecipe(). An unrecognized
+   attacker/defender id later at playback time is simply skipped, not
+   trusted to exist — see advanceReplayStep() below. */
+function reviveReplayUnit(u){
+  if(!u || typeof u!=='object' || typeof u.id!=='string' || (u.side!=='player' && u.side!=='enemy')) return null;
+  return {
+    id: u.id, side: u.side, row: (u.row==='back') ? 'back' : 'front',
+    name: typeof u.name==='string' ? u.name.slice(0,40) : '???',
+    emoji: typeof u.emoji==='string' ? u.emoji.slice(0,8) : '',
+    sprite: reviveSpriteRecipe(u.sprite),
+    element: (typeof u.element==='string' && PARTICLE_ELEMS.indexOf(u.element)>=0) ? u.element : null,
+    elements: Array.isArray(u.elements) ? u.elements.filter(e=>PARTICLE_ELEMS.indexOf(e)>=0).slice(0,2) : [],
+    maxHp: (typeof u.maxHp==='number' && isFinite(u.maxHp) && u.maxHp>0) ? Math.floor(u.maxHp) : 1,
+    isBoss: u.isBoss===true, isGenerator: u.isGenerator===true, isAce: u.isAce===true,
+    isVanguard: u.isVanguard===true, isReinforcement: u.isReinforcement===true,
+    plating: (typeof u.plating==='string' && PARTICLE_ELEMS.indexOf(u.plating)>=0) ? u.plating : null,
+    corruption: (typeof u.corruption==='number' && isFinite(u.corruption) && u.corruption>=0) ? Math.floor(u.corruption) : 0,
+    trait: (u.trait && typeof u.trait==='object' && TRAITS[u.trait.key])
+      ? { key:u.trait.key, elem: typeof u.trait.elem==='string' ? u.trait.elem : undefined } : null,
+  };
+}
+function reviveReplayRoster(roster){
+  if(!roster || typeof roster!=='object') return { player:[], enemy:[] };
+  return {
+    player: Array.isArray(roster.player) ? roster.player.map(reviveReplayUnit).filter(u=>u && u.side==='player').slice(0,6) : [],
+    enemy: Array.isArray(roster.enemy) ? roster.enemy.map(reviveReplayUnit).filter(u=>u && u.side==='enemy').slice(0,8) : [],
+  };
+}
+function reviveReplayLog(log){
+  if(!Array.isArray(log)) return [];
+  return log.filter(e => e && typeof e==='object' && typeof e.a==='string' && typeof e.d==='string')
+    .map(e => ({
+      a: e.a, d: e.d,
+      dmg: (typeof e.dmg==='number' && isFinite(e.dmg) && e.dmg>=0) ? Math.floor(e.dmg) : 0,
+      crit: e.crit===true, faint: e.faint===true, miss: e.miss===true, dodge: e.dodge===true, cascade: e.cascade===true,
+      elem: (typeof e.elem==='string' && PARTICLE_ELEMS.indexOf(e.elem)>=0) ? e.elem : null,
+      msg: typeof e.msg==='string' ? e.msg.slice(0,200) : '',
+    }))
+    .slice(0, REPLAY_LOG_CAP);
+}
 function reviveReplays(list){
   if(!Array.isArray(list)) return [];
   return list.filter(r => r && typeof r==='object'
@@ -5931,6 +6024,8 @@ function reviveReplays(list){
       highlights: Array.isArray(r.highlights) ? r.highlights.filter(h=>typeof h==='string').map(h=>h.slice(0,200)).slice(0,6) : [],
       at: (typeof r.at==='number' && isFinite(r.at)) ? r.at : Date.now(),
       shared: r.shared === true,
+      log: reviveReplayLog(r.log),
+      roster: reviveReplayRoster(r.roster),
     }))
     .slice(0, REPLAY_CAP);
 }
@@ -5960,7 +6055,25 @@ function doShareReplay(id){
     }
   });
 }
-function renderReplayCard(rep, remote){
+/* Normalizes a local replay object (fields at the top level) or a remote
+   community row ({display_name, data, created_at}, data holding the same
+   shape) into one shape Replay Playback can consume regardless of origin. */
+function replayPlaybackSource(rep, remote){
+  const d = remote ? (rep.data||{}) : rep;
+  return {
+    label: (typeof d.label==='string' && d.label) || 'Battle',
+    kind: REPLAY_KINDS.indexOf(d.kind)>=0 ? d.kind : 'boss',
+    log: Array.isArray(d.log) ? d.log : [],
+    roster: (d.roster && typeof d.roster==='object') ? d.roster : null,
+    by: remote ? (rep.display_name || 'Commander') : null,
+  };
+}
+function canWatchReplay(rep, remote){
+  const src = replayPlaybackSource(rep, remote);
+  return !!(src.roster && Array.isArray(src.roster.player) && src.roster.player.length
+    && Array.isArray(src.roster.enemy) && src.roster.enemy.length && src.log.length);
+}
+function renderReplayCard(rep, remote, idx){
   const label = remote ? ((rep.data && rep.data.label) || 'Battle') : rep.label;
   const kind = remote ? (rep.data && rep.data.kind) : rep.kind;
   const stage = remote ? ((rep.data && rep.data.stage) || 1) : rep.stage;
@@ -5976,12 +6089,15 @@ function renderReplayCard(rep, remote){
       : (signedIn()
           ? `<button class="btn small" ${social.replayBusy?'disabled':''} onclick="doShareReplay('${rep.id}')">📤 Share</button>`
           : `<span class="dim">sign in to share</span>`));
+  const watchBtn = canWatchReplay(rep, remote)
+      ? `<button class="btn small" onclick="${remote?'goWatchRemoteReplay('+idx+')':'goWatchLocalReplay(\''+rep.id+'\')'}">▶ Watch</button>`
+      : `<span class="dim" style="font-size:13px;">no full playback recorded</span>`;
   return `
   <div class="testbox" style="margin-bottom:8px;">
     <div style="color:var(--gold)">${replayEmoji(kind)} ${escapeHtml(label)}${remote?(' — '+escapeHtml(rep.display_name||'Commander')):''}</div>
     <div class="dim" style="font-size:14px;">${escapeHtml(stageLabel)} · power ${power} · ${unitLine}</div>
     ${highlights.map(h=>`<div class="dim" style="font-size:13px; margin-top:2px;">${escapeHtml(h)}</div>`).join('')}
-    <div style="margin-top:6px;">${shareBtn}</div>
+    <div class="row" style="margin-top:6px; align-items:center;">${watchBtn}${shareBtn}</div>
   </div>`;
 }
 function renderReplays(){
@@ -5993,7 +6109,7 @@ function renderReplays(){
     ? (social.replaysError
         ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.replaysError)}</p>`
         : ((social.replays||[]).length
-            ? social.replays.map(r=>renderReplayCard(r,true)).join('')
+            ? social.replays.map((r,i)=>renderReplayCard(r,true,i)).join('')
             : '<p class="dim">Nobody has shared a replay yet.</p>'))
     : `<p class="dim">Sign in to browse replays other commanders have shared.</p><button class="btn" onclick="goAccount()">👤 Sign in</button>`;
   return `
@@ -6008,6 +6124,170 @@ function renderReplays(){
     ${community}
   </div>
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
+/* ============ REPLAY PLAYBACK ============
+   A sequel to the capture side above: instead of just the formation/power/
+   highlights snapshot, actually re-enact the fight action by action on the
+   same two-lane battlefield the live game uses. state.playback holds its
+   own small working copies of both rosters (hp/fainted mutated forward as
+   the log plays) plus the log and a step cursor — deliberately not
+   state.battle itself, since nothing here is a real, interactive fight:
+   no queue, no gauge, no player input. Reuses renderUnit()/unitSpriteHtml()
+   unmodified (activeId=null and an empty target list mean nothing is ever
+   selectable, so none of their live-battle-only branches ever fire) and
+   the exact same fx()/fxMotion()/spawnParticles() queues applyDamage()
+   itself queues from, since those only ever look up DOM nodes by
+   data-unit id — they don't care whether the id belongs to a real
+   in-progress battle or a replay being stepped through by hand.
+   First-N capped (REPLAY_LOG_CAP, set where the log is recorded), never a
+   rolling window, so playback always starts from a real full-HP opening —
+   an unusually long fight just stops partway through rather than ever
+   showing an inconsistent starting HP. */
+function playbackUnitById(id){
+  const pb = state.playback; if(!pb) return null;
+  return pb.player.find(u=>u.id===id) || pb.enemy.find(u=>u.id===id) || null;
+}
+function advanceReplayStep(){
+  const pb = state.playback;
+  if(!pb || pb.step >= pb.log.length) return false;
+  const e = pb.log[pb.step];
+  const a = playbackUnitById(e.a), d = playbackUnitById(e.d);
+  if(a && d){
+    if(!e.miss && !e.dodge){
+      d.hp = Math.max(0, d.hp - (e.dmg||0));
+      if(e.faint || d.hp<=0) d.fainted = true;
+    }
+    if(!e.cascade) fxMotion(a, d, e.elem, !e.miss && !e.dodge && (e.dmg||0)>0);
+    if(e.miss) fx(d.id, 'MISS', 'miss');
+    else if(e.dodge) fx(d.id, 'DODGE', 'miss');
+    else if(e.cascade) fx(d.id, '⚡-'+e.dmg, 'crit');
+    else if((e.dmg||0) > 0) fx(d.id, '-'+e.dmg+(e.crit?'!':''), e.crit ? 'crit' : (d.side==='player'?'hurt':'dmg'));
+    else fx(d.id, 'BLOCK', 'miss');
+    sfx(e.miss || e.dodge ? 'miss' : (e.crit ? 'crit' : ((e.dmg||0)>0 ? 'hit' : 'shield')));
+    if(d.fainted) sfx('faint');
+  }
+  pb.step++;
+  return true;
+}
+function resetReplayPlaybackUnits(pb){
+  pb.player.forEach(u=>{ u.hp=u.maxHp; u.fainted=false; });
+  pb.enemy.forEach(u=>{ u.hp=u.maxHp; u.fainted=false; });
+}
+function replayStepForward(){
+  const pb = state.playback; if(!pb) return;
+  pb.playing = false;
+  advanceReplayStep();
+  render();
+}
+function toggleReplayPlay(){
+  const pb = state.playback; if(!pb) return;
+  if(pb.step >= pb.log.length){ resetReplayPlaybackUnits(pb); pb.step = 0; }
+  pb.playing = !pb.playing;
+  if(pb.playing) schedulePlaybackTick();
+  render();
+}
+function schedulePlaybackTick(){
+  const pb = state.playback;
+  if(!pb || !pb.playing) return;
+  setTimeout(()=>{
+    const live = state.playback;
+    if(!live || !live.playing) return;
+    if(!advanceReplayStep()){ live.playing = false; render(); return; }
+    render();
+    schedulePlaybackTick();
+  }, pb.speed===2 ? 450 : 900);
+}
+function restartReplayPlayback(){
+  const pb = state.playback; if(!pb) return;
+  resetReplayPlaybackUnits(pb);
+  pb.step = 0; pb.playing = false;
+  render();
+}
+function cycleReplaySpeed(){
+  const pb = state.playback; if(!pb) return;
+  pb.speed = pb.speed===2 ? 1 : 2;
+  render();
+}
+function stopReplayPlayback(){
+  state.playback = null;
+  state.screen = 'replays';
+  render();
+}
+function startReplayPlayback(src){
+  const roster = reviveReplayRoster(src.roster);
+  const log = reviveReplayLog(src.log);
+  if(!roster.player.length || !roster.enemy.length || !log.length) return false;
+  state.playback = {
+    label: src.label, kind: src.kind, by: src.by,
+    player: roster.player.map(u=>Object.assign({}, u, { hp:u.maxHp, fainted:false })),
+    enemy: roster.enemy.map(u=>Object.assign({}, u, { hp:u.maxHp, fainted:false })),
+    log, step: 0, playing: false, speed: 1,
+  };
+  state.screen = 'replaywatch';
+  sfx('click');
+  render();
+  return true;
+}
+function goWatchLocalReplay(id){
+  const rep = (state.replays||[]).find(r=>r.id===id);
+  if(!rep) return;
+  startReplayPlayback(replayPlaybackSource(rep, false));
+}
+function goWatchRemoteReplay(idx){
+  const rep = (social.replays||[])[idx];
+  if(!rep) return;
+  startReplayPlayback(replayPlaybackSource(rep, true));
+}
+function renderReplayPlayback(){
+  const pb = state.playback;
+  if(!pb){
+    return `
+    <div class="panel"><h2 class="section">REPLAY</h2><p class="dim">No replay loaded.</p></div>
+    <div class="panel footer-nav"><button class="btn" onclick="state.screen='replays'; render();">← Back to Replays</button></div>`;
+  }
+  const uHtml = (list)=>list.map(u=>renderUnit(u, null, [])).join('');
+  const enemySide = `
+    <div class="bf-side enemy">
+      <div class="bf-side-head">🤖 RUSTBOUND FORCES</div>
+      <div class="bf-cols">
+        <div class="unit-row">${uHtml(pb.enemy.filter(u=>u.row==='front'))}</div>
+        <div class="unit-row">${uHtml(pb.enemy.filter(u=>u.row==='back'))}</div>
+      </div>
+    </div>`;
+  const playerSide = `
+    <div class="bf-side player">
+      <div class="bf-side-head">🛡 ${pb.by?escapeHtml(pb.by)+"'S LEGION":'YOUR LEGION'}</div>
+      <div class="bf-cols">
+        <div class="unit-row">${uHtml(pb.player.filter(u=>u.row==='back'))}</div>
+        <div class="unit-row">${uHtml(pb.player.filter(u=>u.row==='front'))}</div>
+      </div>
+    </div>`;
+  const done = pb.step >= pb.log.length;
+  const feed = pb.log.slice(0, pb.step).slice(-6).reverse()
+    .map(e=>`<div>${escapeHtml(e.msg||'')}</div>`).join('') || '<div class="dim">Press Play to begin.</div>';
+  return `
+  <div class="panel">
+    <h2 class="section">${replayEmoji(pb.kind)} REPLAY — ${escapeHtml(pb.label)}</h2>
+    <p class="dim">${pb.log.length>=REPLAY_LOG_CAP
+        ? 'This fight ran long — showing the first '+REPLAY_LOG_CAP+' actions.'
+        : 'Watching exactly what happened, action by action.'}</p>
+  </div>
+  <div class="panel">
+    ${enemySide}
+    ${playerSide}
+  </div>
+  <div class="panel">
+    <div id="log">${feed}</div>
+    <div class="dim" style="margin-top:8px;">${done ? 'Replay finished.' : 'Action '+(pb.step+1)+' / '+pb.log.length}</div>
+    <div class="row" style="margin-top:8px;">
+      <button class="btn primary" onclick="toggleReplayPlay()">${pb.playing?'⏸ Pause':(done?'▶ Play again':'▶ Play')}</button>
+      <button class="btn" ${done?'disabled':''} onclick="replayStepForward()">⏭ Step</button>
+      <button class="btn small" onclick="cycleReplaySpeed()">${pb.speed}×</button>
+      <button class="btn small" onclick="restartReplayPlayback()">↺ Restart</button>
+    </div>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="stopReplayPlayback()">← Back to Replays</button></div>`;
 }
 
 /* ============ MONSTER NICKNAMES ============
@@ -6349,7 +6629,7 @@ function beginBattle(){
                      : buildEnemyUnits(state.stage, terrain, adapted, usePlating, platingElem),
     terrain, adapted, plating: usePlating ? platingElem : null,
     queue: [], qIndex: 0, gauge: 0,
-    log: [], pendingAction: null, result: null,
+    log: [], actionLog: [], pendingAction: null, result: null,
     elemDamage: {},
     totalDamage: 0,
     terrainShifts: 0,
@@ -6409,6 +6689,21 @@ function beginBattle(){
 function logMsg(msg){
   state.battle.log.unshift(msg);
   if(state.battle.log.length>40) state.battle.log.pop();
+}
+/* ---- Replay Playback: a compact structured record of every attack, kept
+   alongside the prose log above for Battle Replays to actually re-enact
+   turn-by-turn later (see REPLAY PLAYBACK below). Capped generously but
+   firmly — first-N, not a rolling window — so a fight that runs unusually
+   long (a dragged-out Reinforcement Wave, a long Foundry Core siege) simply
+   stops recording past the cap rather than growing the save file forever;
+   the replay is honest about showing only the opening portion when that
+   happens, same "capped, never crashes" restraint as everything else here. */
+const REPLAY_LOG_CAP = 120;
+function recordReplayAction(rec){
+  if(!state.battle) return;
+  if(!Array.isArray(state.battle.actionLog)) state.battle.actionLog = [];
+  if(state.battle.actionLog.length >= REPLAY_LOG_CAP) return;
+  state.battle.actionLog.push(rec);
 }
 function aliveUnits(){ return state.battle.playerUnits.concat(state.battle.enemyUnits).filter(u=>!u.fainted); }
 function effectiveSpd(u){ return (u.status && u.status.type==='slow') ? Math.round(u.spd*0.7) : u.spd; }
@@ -6674,15 +6969,19 @@ function chargeGauge(amount){
 
 function applyDamage(attacker, defender, isSkill){
   if(attacker.missChance && Math.random()<attacker.missChance){
-    logMsg(`🌫️ ${attacker.emoji} ${attacker.name}'s attack is swallowed by the storm and misses!`);
+    const missMsg = `🌫️ ${attacker.emoji} ${attacker.name}'s attack is swallowed by the storm and misses!`;
+    logMsg(missMsg);
     sfx('miss'); fx(defender.id, 'MISS', 'miss');
     fxMotion(attacker, defender, null, false);
+    recordReplayAction({ a:attacker.id, d:defender.id, miss:true, msg:missMsg });
     return;
   }
   if(defender.dodge && Math.random()<defender.dodge){
-    logMsg(`💨 ${defender.emoji} ${defender.name} dodges the attack!`);
+    const dodgeMsg = `💨 ${defender.emoji} ${defender.name} dodges the attack!`;
+    logMsg(dodgeMsg);
     sfx('miss'); fx(defender.id, 'DODGE', 'miss');
     fxMotion(attacker, defender, null, false);
+    recordReplayAction({ a:attacker.id, d:defender.id, dodge:true, msg:dodgeMsg });
     return;
   }
   const forceCrit = !!(attacker.gambitFirstCrit && !attacker.gambitFirstCritUsed);
@@ -6706,7 +7005,9 @@ function applyDamage(attacker, defender, isSkill){
   if(defender.fainted) sfx('faint');
   const verb = isSkill ? attacker.skillName : 'attacks';
   const dual = (attacker.attackElements && attacker.attackElements.length>1) ? ` [${strikeElem}]` : '';
-  logMsg(`${attacker.emoji} ${attacker.name} ${isSkill?'uses '+verb+' on':verb} ${defender.emoji} ${defender.name}${dual} for ${finalDmg}${crit?' (CRIT!)':''}${note}${defender.fainted?' — defeated!':''}`);
+  const hitMsg = `${attacker.emoji} ${attacker.name} ${isSkill?'uses '+verb+' on':verb} ${defender.emoji} ${defender.name}${dual} for ${finalDmg}${crit?' (CRIT!)':''}${note}${defender.fainted?' — defeated!':''}`;
+  logMsg(hitMsg);
+  recordReplayAction({ a:attacker.id, d:defender.id, dmg:finalDmg, crit:!!crit, faint:!!defender.fainted, elem:strikeElem, msg:hitMsg });
 
   if(attacker.side==='player' && defender.side==='enemy' && finalDmg>0){
     const b = state.battle;
@@ -6806,7 +7107,9 @@ function applyCascadeOverflow(attacker, target, overflow, strikeElem){
   if(target.hp<=0) target.fainted = true;
   fx(target.id, '⚡-' + dmg, 'crit');
   sfx('crit');
-  logMsg(`💥 The blow cascades — ${target.emoji} ${target.name} takes ${dmg} overflow damage${target.fainted?' — defeated!':''}!`);
+  const cascadeMsg = `💥 The blow cascades — ${target.emoji} ${target.name} takes ${dmg} overflow damage${target.fainted?' — defeated!':''}!`;
+  logMsg(cascadeMsg);
+  recordReplayAction({ a:attacker.id, d:target.id, dmg, crit:false, faint:!!target.fainted, elem:strikeElem, cascade:true, msg:cascadeMsg });
   if(attacker.side==='player' && target.side==='enemy'){
     const b = state.battle;
     b.elemDamage[strikeElem] = (b.elemDamage[strikeElem]||0) + dmg;
@@ -7173,6 +7476,8 @@ function playerTarget(targetId){
     logMsg(`${target.emoji} ${target.name} takes ${finalBig} damage!${target.fainted?' — defeated!':''}`);
     fx(target.id, '-' + finalBig + '!', 'crit');
     fxMotion(unit, target, am.elem, finalBig>0);
+    recordReplayAction({ a:unit.id, d:target.id, dmg:finalBig, crit:true, faint:!!target.fainted, elem:am.elem,
+      msg:`✨💥 ${unit.emoji} ${unit.name} unleashes an ALPHA STRIKE on ${target.emoji} ${target.name} for ${finalBig}${target.fainted?' — defeated!':''}` });
     b.pendingAction = null; b.qIndex++;
     render();
     if(checkBattleEnd()) return;

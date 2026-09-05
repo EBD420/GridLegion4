@@ -130,6 +130,7 @@ ok('the Ace card names the trophy and the stage it fell at', html.indexOf('Ironc
 ok('the Vanguard card does the same, independently', html.indexOf('Vanguard Sparkdrone')>=0 && html.indexOf('Stage 14')>=0);
 ok('the Archive tally reflects the one fragment found, filed under its real theory', html.indexOf(ARCHIVE_THEORIES.builders.name+': 1/')>=0);
 
+hubTab='progress';
 let hubHtml = renderHub();
 ok('the Hub carries a button straight into the Trophy Case', hubHtml.indexOf('Trophy Case')>=0 && hubHtml.indexOf('onclick="goTrophyCase()"')>=0);
 goTrophyCase();

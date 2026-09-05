@@ -30,6 +30,7 @@ ok('goRedeploy resets any stale pick', state.redeployPick===null);
 let html = renderRedeploy();
 ok('an empty roster of cleared stages shows the "clear a stage first" message, not a picker', /clear a stage first/i.test(html));
 ok('no stage buttons render when nothing is cleared', !/pickRedeployStage/.test(html));
+hubTab='campaign';
 let hubHtml = renderHub();
 ok('the Hub hides the Redeployment button entirely until something is cleared', hubHtml.indexOf('Redeployment')<0);
 

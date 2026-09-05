@@ -80,6 +80,7 @@ commander = { xp:0, level:1 };
 console.log('\n[64] the hub and rank screen reflect it');
 commander = { xp:2000, level:3 };
 startGame();
+hubTab='progress';
 ok('the hub button shows the current level', /Commander Rank 3/.test(renderHub()), renderHub().match(/Commander Rank \d+/));
 goCommanderRank();
 ok('navigating there sets the screen', state.screen==='commander');

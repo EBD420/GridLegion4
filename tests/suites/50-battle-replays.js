@@ -161,6 +161,7 @@ return shareReplay(localId).then(r=>{
   console.log('\n[334] Hub wiring and goReplays(): the button, its live count, and navigation with/without an account');
   startGame();
   captureReplay('boss','Count Test felled');
+  hubTab='progress';
   let hubHtml = renderHub();
   ok('the Hub carries a button straight into Battle Replays, with a live count', hubHtml.indexOf('onclick="goReplays()"')>=0 && hubHtml.indexOf('Replays (1)')>=0, hubHtml);
 

@@ -137,6 +137,7 @@ return cloudSignUp('wb1@example.com','pw123456').then(()=>{
   SRV.noWorldBossTable = false;
 
   console.log('\n[345] Hub wiring: the button is present, and goWorldBoss() fetches when signed in but just navigates when signed out');
+  hubTab='online';
   let hubHtml = renderHub();
   ok('the Hub carries a button straight into World Boss', hubHtml.indexOf('World Boss')>=0 && hubHtml.indexOf('onclick="goWorldBoss()"')>=0);
 

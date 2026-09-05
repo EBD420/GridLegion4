@@ -161,6 +161,7 @@ let chain = cloudSignUp('new@example.com','pw123456').then(r=>{
   ok('a real "active X ago" reads for the other row', /active/.test(html2));
 
   console.log('\n[311] Hub wiring: the button is present, goOnline() syncs then fetches when signed in, and just navigates when signed out');
+  hubTab='online';
   const hubHtml = renderHub();
   ok('the Hub carries a button straight into Online Now', hubHtml.indexOf('Online Now')>=0 && hubHtml.indexOf('onclick="goOnline()"')>=0);
 
