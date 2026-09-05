@@ -25,6 +25,12 @@ const SRV = {
   users: {},              // email -> {id,password}
   rows: {},               // userId -> {slot: {data, updated_at}}
   guilds: {}, gmembers: {}, bosses: {}, rdamage: {}, ladder: {}, cvotes: {}, presence: {},
+  replays: {},            // id -> {id,user_id,display_name,data,created_at}
+  worldBoss: {},          // id -> {id,name,max_hp,hp,started_at,defeated_at,last_hit_by}
+  worldBossDamage: {},    // "bossId|userId" -> {boss_id,user_id,display_name,damage}
+  warQueue: {},           // guildId -> {guild_id,queued_at}
+  wars: {},               // id -> {id,guild_a,guild_b,guild_a_name,guild_a_tag,guild_b_name,guild_b_tag,score_a,score_b,starts_at,ends_at}
+  warContrib: {},         // "warId|userId" -> {war_id,user_id,display_name,score}
   online: true,
   requireConfirm: false,
   tokens: {},             // access -> {userId}
@@ -35,11 +41,15 @@ const SRV = {
 function srvReset(){
   SRV.users={}; SRV.rows={};
   SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={}; SRV.cvotes={}; SRV.presence={};
+  SRV.replays={}; SRV.worldBoss={}; SRV.worldBossDamage={}; SRV.warQueue={}; SRV.wars={}; SRV.warContrib={};
   SRV.online=true; SRV.requireConfirm=false; SRV.tokens={}; SRV.refreshes={};
   SRV.calls=[]; SRV.nextId=1; SRV.tableMissing=false; SRV.leakRows=false; SRV.rejectKey=false;
   SRV.preGuildHall=false;   // tables/functions installed, but step 4 (guild-hall upgrade) never run
   SRV.noCouncilTable=false; // steps 1/2/4 done, but step 5 (guild council) never run
   SRV.noPresenceTable=false; // steps 1/2/4/5 done, but step 6 (online now) never run
+  SRV.noReplaysTable=false;   // ...but step 7 (battle replays) never run
+  SRV.noWorldBossTable=false; // ...but step 8 (world boss) never run
+  SRV.noGuildWarsTable=false; // ...but step 9 (guild wars) never run
 }
 function lvlFor(xp){ return xp>=60000?6:xp>=30000?5:xp>=14000?4:xp>=6000?3:xp>=2000?2:1; }
 function mkSession(userId,email){
@@ -203,6 +213,67 @@ global.fetch = function(url, opts){
       SRV.presence[uid]={user_id:uid, username:body.p_display||'Commander', last_seen:new Date().toISOString()};
       return res(200,null);
     }
+    if(fn==='start_world_boss'){
+      if(SRV.noWorldBossTable) return res(404,{message:"Could not find the function public.start_world_boss() in the schema cache"});
+      const active = Object.values(SRV.worldBoss).find(w=>!w.defeated_at);
+      if(active) return res(400,{message:'a world boss is already active'});
+      const defeatedCount = Object.values(SRV.worldBoss).filter(w=>w.defeated_at).length;
+      const hp = 300000 + defeatedCount*150000;
+      const id = 'wb'+(SRV.nextId++);
+      SRV.worldBoss[id] = { id, name:'Rustbound Sovereign', max_hp:hp, hp,
+        started_at:String(1000000+SRV.nextId), defeated_at:null, last_hit_by:null };
+      return res(200, id);
+    }
+    if(fn==='contribute_world_boss'){
+      if(SRV.noWorldBossTable) return res(404,{message:"Could not find the function public.contribute_world_boss(p_damage, p_display) in the schema cache"});
+      const boss = Object.values(SRV.worldBoss).filter(w=>!w.defeated_at)
+                   .sort((a,c)=>c.started_at.localeCompare(a.started_at))[0];
+      if(!boss) return res(400,{message:'no active world boss'});
+      const dmg = Math.min(Math.max(Number(body.p_damage)||0,0),20000);
+      boss.hp = Math.max(0, boss.hp-dmg);
+      if(boss.hp<=0){ boss.defeated_at='now'; boss.last_hit_by = body.p_display||'Commander'; }
+      const k = boss.id+'|'+uid;
+      SRV.worldBossDamage[k]=SRV.worldBossDamage[k]||{boss_id:boss.id,user_id:uid,display_name:body.p_display||'Commander',damage:0};
+      SRV.worldBossDamage[k].damage+=dmg;
+      SRV.worldBossDamage[k].display_name=body.p_display||SRV.worldBossDamage[k].display_name;
+      return res(200,[{remaining:boss.hp, contributed:dmg}]);
+    }
+    if(fn==='start_guild_war'){
+      if(SRV.noGuildWarsTable) return res(404,{message:"Could not find the function public.start_guild_war() in the schema cache"});
+      const g_id = myGuild(); if(!g_id) return res(400,{message:'you are not in a guild'});
+      const activeWar = Object.values(SRV.wars).find(w=>(w.guild_a===g_id||w.guild_b===g_id) && Date.parse(w.ends_at) > Date.now());
+      if(activeWar) return res(200, activeWar.id);
+      const myInfo = SRV.guilds[g_id];
+      const oppEntry = Object.values(SRV.warQueue).filter(q=>q.guild_id!==g_id)
+                       .sort((a,c)=>a.queued_at.localeCompare(c.queued_at))[0];
+      if(oppEntry){
+        const oppInfo = SRV.guilds[oppEntry.guild_id];
+        delete SRV.warQueue[oppEntry.guild_id];
+        delete SRV.warQueue[g_id];
+        const id = 'war'+(SRV.nextId++);
+        SRV.wars[id] = { id, guild_a:g_id, guild_b:oppEntry.guild_id,
+          guild_a_name: myInfo.name, guild_a_tag: myInfo.tag,
+          guild_b_name: oppInfo.name, guild_b_tag: oppInfo.tag,
+          score_a:0, score_b:0, starts_at:new Date().toISOString(),
+          ends_at:new Date(Date.now()+48*3600*1000).toISOString() };
+        return res(200, id);
+      }
+      SRV.warQueue[g_id] = { guild_id:g_id, queued_at:new Date().toISOString() };
+      return res(200, null);
+    }
+    if(fn==='contribute_guild_war'){
+      if(SRV.noGuildWarsTable) return res(404,{message:"Could not find the function public.contribute_guild_war(p_score, p_display) in the schema cache"});
+      const g_id = myGuild(); if(!g_id) return res(400,{message:'you are not in a guild'});
+      const w = Object.values(SRV.wars).find(x=>(x.guild_a===g_id||x.guild_b===g_id) && Date.parse(x.ends_at) > Date.now());
+      if(!w) return res(400,{message:'no active guild war'});
+      const amt = Math.min(Math.max(Number(body.p_score)||0,0),20000);
+      if(w.guild_a===g_id) w.score_a+=amt; else w.score_b+=amt;
+      const k = w.id+'|'+uid;
+      SRV.warContrib[k]=SRV.warContrib[k]||{war_id:w.id,user_id:uid,display_name:body.p_display||'Commander',score:0};
+      SRV.warContrib[k].score+=amt;
+      SRV.warContrib[k].display_name=body.p_display||SRV.warContrib[k].display_name;
+      return res(200,[{my_score: w.guild_a===g_id?w.score_a:w.score_b, opp_score: w.guild_a===g_id?w.score_b:w.score_a}]);
+    }
     return res(404,{message:'no function '+fn});
   }
 
@@ -279,6 +350,70 @@ global.fetch = function(url, opts){
     return res(200, Object.values(SRV.presence).filter(p=>p.last_seen>=cutoff)
       .sort((a,c)=>c.last_seen.localeCompare(a.last_seen))
       .map(p=>({user_id:p.user_id,username:p.username,last_seen:p.last_seen})));
+  }
+  if(path.indexOf('/rest/v1/replays')===0){
+    if(SRV.noReplaysTable) return res(404,{message:"Could not find the table 'public.replays' in the schema cache"});
+    if((opts.method||'GET')==='POST'){
+      if(!who) return res(401,{message:'not signed in'});
+      const id='rep'+(SRV.nextId++);
+      SRV.replays[id] = { id, user_id: body.user_id, display_name: body.display_name,
+        data: body.data, created_at: body.created_at || new Date().toISOString() };
+      return res(201);
+    }
+    // Bare self-test probe (?select=display_name&limit=1, no order): just checks the table exists.
+    if(path.indexOf('order=')<0) return res(200, Object.values(SRV.replays).slice(0,1).map(r=>({display_name:r.display_name})));
+    if(!who) return res(401,{message:'not signed in'});
+    return res(200, Object.values(SRV.replays)
+      .sort((a,c)=>c.created_at.localeCompare(a.created_at))
+      .map(r=>({display_name:r.display_name, data:r.data, created_at:r.created_at})));
+  }
+  // world_boss_damage must be checked before world_boss below — its path is
+  // a prefix match of "/rest/v1/world_boss" too.
+  if(path.indexOf('/rest/v1/world_boss_damage')===0){
+    if(SRV.noWorldBossTable) return res(404,{message:"Could not find the table 'public.world_boss_damage' in the schema cache"});
+    if(!who) return res(401,{message:'not signed in'});
+    const bm=path.match(/boss_id=eq\.([^&]+)/);
+    if(!bm) return res(200,[]);
+    return res(200, Object.values(SRV.worldBossDamage).filter(d=>d.boss_id===bm[1])
+      .sort((a,c)=>c.damage-a.damage).map(d=>({display_name:d.display_name,damage:d.damage})));
+  }
+  if(path.indexOf('/rest/v1/world_boss')===0){
+    if(SRV.noWorldBossTable) return res(404,{message:"Could not find the table 'public.world_boss' in the schema cache"});
+    // Bare self-test probe (?select=id&limit=1, no order): just checks the table exists.
+    if(path.indexOf('order=')<0) return res(200, Object.values(SRV.worldBoss).slice(0,1).map(w=>({id:w.id})));
+    if(!who) return res(401,{message:'not signed in'});
+    return res(200, Object.values(SRV.worldBoss)
+      .sort((a,c)=>c.started_at.localeCompare(a.started_at)).slice(0,1)
+      .map(w=>({id:w.id,name:w.name,hp:w.hp,max_hp:w.max_hp,defeated_at:w.defeated_at,started_at:w.started_at,last_hit_by:w.last_hit_by})));
+  }
+  if(path.indexOf('/rest/v1/guild_war_queue')===0){
+    if(SRV.noGuildWarsTable) return res(404,{message:"Could not find the table 'public.guild_war_queue' in the schema cache"});
+    if(!who) return res(401,{message:'not signed in'});
+    const gm=path.match(/guild_id=eq\.([^&]+)/);
+    if(!gm) return res(200,[]);
+    const row = SRV.warQueue[gm[1]];
+    return res(200, row ? [{guild_id:row.guild_id}] : []);
+  }
+  if(path.indexOf('/rest/v1/guild_war_contributions')===0){
+    if(SRV.noGuildWarsTable) return res(404,{message:"Could not find the table 'public.guild_war_contributions' in the schema cache"});
+    if(!who) return res(401,{message:'not signed in'});
+    const wm=path.match(/war_id=eq\.([^&]+)/);
+    if(!wm) return res(200,[]);
+    return res(200, Object.values(SRV.warContrib).filter(c=>c.war_id===wm[1])
+      .sort((a,c)=>c.score-a.score).map(c=>({display_name:c.display_name,score:c.score})));
+  }
+  if(path.indexOf('/rest/v1/guild_wars')===0){
+    if(SRV.noGuildWarsTable) return res(404,{message:"Could not find the table 'public.guild_wars' in the schema cache"});
+    // Bare self-test probe (?select=id&limit=1, no order): just checks the table exists.
+    if(path.indexOf('order=')<0) return res(200, Object.values(SRV.wars).slice(0,1).map(w=>({id:w.id})));
+    if(!who) return res(401,{message:'not signed in'});
+    const mine=SRV.gmembers[who.userId];
+    const gId = mine ? mine.guild_id : null;
+    const visible = Object.values(SRV.wars).filter(w=>w.guild_a===gId || w.guild_b===gId);
+    return res(200, visible.sort((a,c)=>c.starts_at.localeCompare(a.starts_at)).slice(0,1)
+      .map(w=>({id:w.id,guild_a:w.guild_a,guild_b:w.guild_b,guild_a_name:w.guild_a_name,guild_a_tag:w.guild_a_tag,
+                guild_b_name:w.guild_b_name,guild_b_tag:w.guild_b_tag,score_a:w.score_a,score_b:w.score_b,
+                starts_at:w.starts_at,ends_at:w.ends_at})));
   }
 
   if(path.indexOf('/rest/v1/legions')===0){

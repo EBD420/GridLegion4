@@ -712,10 +712,10 @@ const MISSION_POOL = [
 const MISSION_COUNT = 3;
 const MISSION_REWARD = 1;   // salvage parts per mission
 
-function todayKey(){
-  const d = new Date();
+function dateKeyFor(d){
   return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
 }
+function todayKey(){ return dateKeyFor(new Date()); }
 /* Small deterministic PRNG so a given day yields the same missions everywhere. */
 function seedRandom(str){
   let h = 2166136261;
@@ -1450,9 +1450,51 @@ function cloudSelfTest(){
                           } else {
                             add(true, 'Online-now presence table is present.');
                           }
-                          return { lines: out, fatal:false };
+                          return null;
                         })
-                        .catch(()=>({ lines: out, fatal:false }));
+                        .catch(()=>null)
+                        // 6. the replays table (step 7).
+                        .then(()=>{
+                          return cloudFetch('/rest/v1/replays?select=display_name&limit=1', { method:'GET' }, true)
+                            .then(r6=>{
+                              const m6 = (r6.body && (r6.body.message||r6.body.hint)) || '';
+                              if(r6.status===404 || /could not find the table|does not exist/i.test(String(m6))){
+                                add(false, 'The replays table is missing — run step 7 of SETUP-MULTIPLAYER.md to enable sharing Battle Replays.');
+                              } else {
+                                add(true, 'Battle Replays table is present.');
+                              }
+                              return null;
+                            })
+                            .catch(()=>null)
+                            // 7. the world boss table (step 8).
+                            .then(()=>{
+                              return cloudFetch('/rest/v1/world_boss?select=id&limit=1', { method:'GET' }, true)
+                                .then(r7=>{
+                                  const m7 = (r7.body && (r7.body.message||r7.body.hint)) || '';
+                                  if(r7.status===404 || /could not find the table|does not exist/i.test(String(m7))){
+                                    add(false, 'The World Boss table is missing — run step 8 of SETUP-MULTIPLAYER.md to enable it.');
+                                  } else {
+                                    add(true, 'World Boss table is present.');
+                                  }
+                                  return null;
+                                })
+                                .catch(()=>null)
+                                // 8. guild wars (step 9) — the most recent migration.
+                                .then(()=>{
+                                  return cloudFetch('/rest/v1/guild_wars?select=id&limit=1', { method:'GET' }, true)
+                                    .then(r8=>{
+                                      const m8 = (r8.body && (r8.body.message||r8.body.hint)) || '';
+                                      if(r8.status===404 || /could not find the table|does not exist/i.test(String(m8))){
+                                        add(false, 'The Guild Wars tables are missing — run step 9 of SETUP-MULTIPLAYER.md to enable them.');
+                                      } else {
+                                        add(true, 'Guild Wars tables are present.');
+                                      }
+                                      return { lines: out, fatal:false };
+                                    })
+                                    .catch(()=>({ lines: out, fatal:false }));
+                                });
+                            });
+                        });
                     });
                 });
             });
@@ -1468,7 +1510,9 @@ function cloudSelfTest(){
    ============================================================ */
 const social = { guild:null, members:[], raid:null, board:[], ladder:[], rank:null, opponent:null,
                  council:[], councilError:'', status:'', guildError:'', busy:false, lastDuel:null,
-                 online:[], onlineError:'' };
+                 online:[], onlineError:'', replays:[], replaysError:'', replayStatus:'', replayBusy:false,
+                 worldBoss:null, worldBossBoard:[], worldBossError:'', worldBossStatus:'', worldBossBusy:false,
+                 guildWar:null, guildWarError:'', guildWarStatus:'', guildWarBusy:false };
 
 /* ---- guild progression ----
    Thresholds are cumulative XP. Perks are read from the server-held level and
@@ -1721,6 +1765,74 @@ function raidContribute(dmg){
     .then(r=>r.ok?raidFetch().then(()=>({ok:true, body:r.body})):r);
 }
 
+/* ---- world boss ----
+   The same idea as the guild raid above, just not guild-scoped: one shared
+   HP pool, one damage board, everyone signed in can see and hit it. An
+   ordinary stage battle at your current formation, same as a guild raid
+   attempt — only the damage report goes to a different table. See Step 8
+   of SETUP-MULTIPLAYER.md for the schema and the atomic contribute function. */
+const WORLD_BOSS_MISSING = 'World Boss is not installed on your project yet — run Step 8 of SETUP-MULTIPLAYER.md, then reload the schema.';
+function computeWorldBossDamage(b){ return Math.max(0, (b && b.totalDamage) || 0); }
+function worldBossFetch(){
+  if(!signedIn()) return Promise.resolve(null);
+  return restGetDiag('world_boss?select=id,name,hp,max_hp,defeated_at,started_at,last_hit_by&order=started_at.desc&limit=1', WORLD_BOSS_MISSING)
+    .then(res=>{
+      if(!res.ok){ social.worldBossError=res.error; social.worldBoss=null; return null; }
+      social.worldBossError='';
+      social.worldBoss = res.rows.length ? res.rows[0] : null;
+      if(!social.worldBoss){ social.worldBossBoard=[]; return null; }
+      return restGet('world_boss_damage?select=display_name,damage&boss_id=eq.'+social.worldBoss.id+'&order=damage.desc&limit=20')
+        .then(rows=>{ social.worldBossBoard = rows||[]; return social.worldBoss; });
+    });
+}
+function worldBossStart(){ return rpc('start_world_boss', {}, WORLD_BOSS_MISSING).then(r=>r.ok?worldBossFetch().then(()=>({ok:true})):r); }
+function worldBossContribute(dmg){
+  return rpc('contribute_world_boss', { p_damage: Math.max(0, Math.round(dmg)), p_display: legionBanner() }, WORLD_BOSS_MISSING)
+    .then(r=>r.ok?worldBossFetch().then(()=>({ok:true, body:r.body})):r);
+}
+
+/* ---- guild wars ----
+   Guild-vs-guild instead of guild-vs-boss: two guilds are matched through a
+   small queue table, then race to the higher battle score before a fixed
+   window closes. Sits next to the raid system rather than replacing it —
+   same "ordinary battle, only the report goes somewhere special" shape as
+   startRaidRun/startWorldBossRun above, and the same atomic-update trust
+   model as contribute_raid. See Step 9 of SETUP-MULTIPLAYER.md. */
+const GUILD_WAR_MISSING = 'Guild Wars are not installed on your project yet — run Step 9 of SETUP-MULTIPLAYER.md, then reload the schema.';
+function computeWarScore(b, result){
+  const base = Math.max(0, (b && b.totalDamage) || 0);
+  return Math.round(base * (result==='win' ? 1.5 : 1));
+}
+function guildWarFetch(){
+  if(!social.guild) return Promise.resolve(null);
+  return restGetDiag('guild_wars?select=id,guild_a,guild_b,guild_a_name,guild_a_tag,guild_b_name,guild_b_tag,score_a,score_b,starts_at,ends_at&order=starts_at.desc&limit=1', GUILD_WAR_MISSING)
+    .then(res=>{
+      if(!res.ok){ social.guildWarError=res.error; social.guildWar=null; social.guildWarBoard=[]; social.guildWarQueued=false; return null; }
+      social.guildWarError='';
+      social.guildWar = res.rows.length ? res.rows[0] : null;
+      return restGet('guild_war_queue?select=guild_id&guild_id=eq.'+social.guild.id)
+        .then(qrows=>{
+          social.guildWarQueued = !!(qrows && qrows.length);
+          if(!social.guildWar){ social.guildWarBoard=[]; return null; }
+          return restGet('guild_war_contributions?select=display_name,score&war_id=eq.'+social.guildWar.id+'&order=score.desc&limit=20')
+            .then(rows=>{ social.guildWarBoard = rows||[]; return social.guildWar; });
+        });
+    });
+}
+/* Returns the war id if matched immediately, or null if now queued and
+   waiting for an opponent guild — the caller tells those apart to phrase
+   the status message. */
+function guildWarStart(){
+  return rpc('start_guild_war', {}, GUILD_WAR_MISSING).then(r=>{
+    if(!r.ok) return r;
+    return guildWarFetch().then(()=>({ok:true, matched: !!r.body}));
+  });
+}
+function guildWarContribute(score){
+  return rpc('contribute_guild_war', { p_score: Math.max(0, Math.round(score)), p_display: legionBanner() }, GUILD_WAR_MISSING)
+    .then(r=>r.ok?guildWarFetch().then(()=>({ok:true, body:r.body})):r);
+}
+
 /* ---- ladder ---- */
 function ladderSnapshot(){
   const units = [];
@@ -1801,6 +1913,43 @@ function presenceFetch(){
     });
 }
 
+/* ---- battle replays: sharing ----
+   A direct REST insert rather than an rpc() wrapper, unlike contribute_raid
+   or report_duel — sharing a replay needs no atomic server-side arithmetic
+   (no HP pool to decrement, no rating to move), just "write one row that
+   belongs to me," the same shape cloudPutSlot already uses for cloud saves. */
+function shareReplay(localId){
+  if(!signedIn()) return Promise.resolve({ok:false, error:'Sign in first.'});
+  const rep = (state.replays||[]).find(r=>r.id===localId);
+  if(!rep) return Promise.resolve({ok:false, error:'Replay not found.'});
+  const row = {
+    user_id: cloud.session.user.id,
+    display_name: legionBanner(),
+    data: { kind:rep.kind, label:rep.label, stage:rep.stage, deep:rep.deep, boss:rep.boss,
+            power:rep.power, formation:rep.formation, highlights:rep.highlights, at:rep.at },
+    created_at: new Date().toISOString(),
+  };
+  return authed('/rest/v1/replays', {
+      method:'POST',
+      headers:{ 'Prefer':'return=minimal' },
+      body: JSON.stringify(row),
+    })
+    .then(r=>r.ok ? {ok:true} : {ok:false, error: restGetErrorText(r,
+        'Battle Replays are not installed on your project yet — run Step 7 of SETUP-MULTIPLAYER.md, then reload the schema.')})
+    .catch(()=>({ok:false, error:'Could not reach the server.'}));
+}
+function communityReplaysFetch(){
+  if(!signedIn()) return Promise.resolve(null);
+  return restGetDiag('replays?select=display_name,data,created_at&order=created_at.desc&limit=20',
+      'Battle Replays are not installed on your project yet — run Step 7 of SETUP-MULTIPLAYER.md, then reload the schema.')
+    .then(res=>{
+      if(!res.ok){ social.replaysError=res.error; social.replays=[]; return null; }
+      social.replaysError='';
+      social.replays = res.rows;
+      return social.replays;
+    });
+}
+
 /* ============ PERSISTENCE ============ */
 const SAVE_VERSION = 1;
 const SAVE_PREFIX = 'gridlegion.v1.slot';
@@ -1855,6 +2004,12 @@ function serializeSave(){
     bestStreak: state.bestStreak,
     trophyAce: state.trophyAce,
     trophyVanguard: state.trophyVanguard,
+    loginStreak: state.loginStreak,
+    bestLoginStreak: state.bestLoginStreak,
+    lastLoginDay: state.lastLoginDay,
+    badgesUnlocked: Array.isArray(state.badgesUnlocked) ? state.badgesUnlocked.slice() : [],
+    badge: state.badge || null,
+    replays: Array.isArray(state.replays) ? state.replays.slice(0, REPLAY_CAP) : [],
   };
 }
 function validateSave(d){
@@ -2097,6 +2252,22 @@ function applySave(d, slot){
   }
   state.trophyAce = reviveTrophy(d.trophyAce);
   state.trophyVanguard = reviveTrophy(d.trophyVanguard);
+  /* Attendance Streak + Legion Banners: same "permanent record, survives
+     Rebirth" treatment as the trophies just above. lastLoginDay is validated
+     as a plain YYYY-MM-DD string rather than trusted outright, since it only
+     ever needs to compare equal to dateKeyFor()'s output. A badge can only
+     be worn if it's still present in badgesUnlocked after that list itself
+     is filtered against the current BADGES catalog, so a badge dropped in a
+     later build never surfaces as equipped. */
+  state.loginStreak = (typeof d.loginStreak==='number' && isFinite(d.loginStreak) && d.loginStreak>=0) ? Math.floor(d.loginStreak) : 0;
+  state.bestLoginStreak = (typeof d.bestLoginStreak==='number' && isFinite(d.bestLoginStreak) && d.bestLoginStreak>=0) ? Math.floor(d.bestLoginStreak) : 0;
+  state.lastLoginDay = (typeof d.lastLoginDay==='string' && /^\d{4}-\d{2}-\d{2}$/.test(d.lastLoginDay)) ? d.lastLoginDay : null;
+  state.badgesUnlocked = Array.isArray(d.badgesUnlocked) ? d.badgesUnlocked.filter(k=>BADGES[k]) : [];
+  state.badge = (typeof d.badge==='string' && BADGES[d.badge] && state.badgesUnlocked.indexOf(d.badge)>=0) ? d.badge : null;
+  /* Battle Replays: another permanent, Rebirth-surviving record (see the
+     BATTLE REPLAYS block below) — revived the same defensive way as the
+     War Journal above, since it round-trips through the same save file. */
+  state.replays = reviveReplays(d.replays);
   state.battle = null; state.lastResult = null; state.lastFusion = null;
   state.formSelected = null; state.selectedPart = null; state.campWelcome = null; state.renamingUid = null;
   fuseSelection = [];
@@ -2245,6 +2416,8 @@ let state = {
   tutorial: null,
   duel: null,
   raidRun: false,
+  worldBossRun: false,
+  guildWarRun: false,
   favor: {},
   blessing: null,
   recruited: {},
@@ -2256,6 +2429,7 @@ let state = {
   profileName: 'Legion',
   emblem: [],
   journal: [],
+  replays: [],
   bestDepth: 0,
   saveState: 'none',
   transfer: null,
@@ -2323,6 +2497,8 @@ function initGame(){
   state.tutorial = null;
   state.duel = null;
   state.raidRun = false;
+  state.worldBossRun = false;
+  state.guildWarRun = false;
   state.trial = null;
   state.redeploy = null;
   state.redeployPick = null;
@@ -2352,6 +2528,12 @@ function initGame(){
   state.trophyAce = null;
   state.trophyVanguard = null;
   state.renamingUid = null;
+  state.loginStreak = 0;
+  state.bestLoginStreak = 0;
+  state.lastLoginDay = null;
+  state.badgesUnlocked = [];
+  state.badge = null;
+  state.replays = [];
 }
 
 function getSpeciesData(speciesId, tier){
@@ -2776,10 +2958,12 @@ function emblemGlyph(keys){
   return (Array.isArray(keys)?keys:[]).map(k=>PARTS[k]?PARTS[k].emoji:'').filter(Boolean).join('');
 }
 function legionBanner(){
+  const badge = (state.badge && BADGES[state.badge] && (state.badgesUnlocked||[]).indexOf(state.badge)>=0)
+    ? BADGES[state.badge].emoji+' ' : '';
   const g = emblemGlyph(state.emblem);
   const name = (state.profileName||'Commander').trim() || 'Commander';
   const base = g ? (g+' '+name) : name;
-  return base + rebirthMark();
+  return badge + base + rebirthMark();
 }
 function goLegionId(){ state.screen='legionid'; state.confirmRebirth=null; sfx('click'); render(); }
 
@@ -3149,11 +3333,13 @@ function render(){
   else if(state.screen==='guild') app.innerHTML = renderGuild();
   else if(state.screen==='ladder') app.innerHTML = renderLadder();
   else if(state.screen==='online') app.innerHTML = renderOnline();
+  else if(state.screen==='worldboss') app.innerHTML = renderWorldBoss();
   else if(state.screen==='legionid') app.innerHTML = renderLegionId();
   else if(state.screen==='journal') app.innerHTML = renderJournal();
   else if(state.screen==='archive') app.innerHTML = renderArchive();
   else if(state.screen==='depthchart') app.innerHTML = renderDepthChart();
   else if(state.screen==='trophycase') app.innerHTML = renderTrophyCase();
+  else if(state.screen==='replays') app.innerHTML = renderReplays();
   else if(state.screen==='gambit') app.innerHTML = renderGambit();
   else if(state.screen==='augment') app.innerHTML = renderAugmentDraft();
   else if(state.screen==='commander') app.innerHTML = renderCommanderRank();
@@ -3378,7 +3564,7 @@ function startTutorial(){
   state.intel = { history:[], wins:0 };
   state.stage = 1;
   state.tutorial = { step:0, done:false, seen:[] };
-  state.trial = null; state.duel = null; state.raidRun = false; state.redeploy = null; state.detour = null;
+  state.trial = null; state.duel = null; state.raidRun = false; state.worldBossRun = false; state.guildWarRun = false; state.redeploy = null; state.detour = null;
   audioResume();
   beginBattle();
 }
@@ -3499,6 +3685,8 @@ function bossBannerHtml(bd){
 
 /* ============ HUB ============ */
 function renderHub(){
+  ensureAttendance();
+  checkBadgeUnlocks();
   const story = storyForStage(state.stage);
   const terrain = terrainForStage(state.stage);
   const deep = isDeep(state.stage);
@@ -3553,6 +3741,7 @@ function renderHub(){
       ${caravanCanAfford(state.caravan)?'':'<span class="dim"> — can\'t make this trade right now.</span>'}
     </div>` : ''}
     ${AUGMENT_IDS.some(hasAugment) ? `<p class="dim">🎴 Augments: ${AUGMENT_IDS.filter(hasAugment).map(id=>AUGMENTS[id].name).join(', ')}</p>` : ''}
+    ${state.loginStreak>0 ? `<p class="dim">📅 Login streak: <b style="color:var(--gold)">${state.loginStreak}</b> day${state.loginStreak===1?'':'s'} running${state.bestLoginStreak>state.loginStreak?` (best ${state.bestLoginStreak})`:''}</p>` : ''}
     <div class="row" style="margin-top:14px;">
       <button class="btn" onclick="goRoster()">📋 Roster & Fusion (${state.roster.length})</button>
       <button class="btn" onclick="goFormation()">⚔ Formation (${filled}/6)</button>
@@ -3569,12 +3758,14 @@ function renderHub(){
       <button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>
       <button class="btn" onclick="goDepthChart()">🗺 Depth Chart</button>
       <button class="btn" onclick="goTrophyCase()">🏆 Trophy Case</button>
+      <button class="btn" onclick="goReplays()">🎬 Replays${state.replays&&state.replays.length?' ('+state.replays.length+')':''}</button>
       <button class="btn" onclick="goCommanderRank()">🎖 Commander Rank ${commander.level}</button>
     </div>
     <div class="row" style="margin-top:10px; align-items:center;">
       <button class="btn small" onclick="goGuild()">🛡 Guild</button>
       <button class="btn small" onclick="goLadder()">🏆 Ladder</button>
       <button class="btn small" onclick="goOnline()">📡 Online Now</button>
+      <button class="btn small" onclick="goWorldBoss()">☠ World Boss</button>
       <button class="btn small audio-btn" onclick="toggleTactical()">${state.tactical?'🧠 Tactical':'⚡ Live'}</button>
       <button class="btn small audio-btn" onclick="toggleSfx()">${audio.sfx?'🔊':'🔇'} SFX</button>
       <button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>
@@ -3733,6 +3924,7 @@ function goGuild(){
     .then(g=>{ if(g) return guildSync().then(()=>guildFetch()); return null; })
     .then(g=>{ if(g) return raidFetch(); return null; })
     .then(()=>{ if(social.guild) return councilFetch(); return null; })
+    .then(()=>{ if(social.guild) return guildWarFetch(); return null; })
     .then(()=>render());
 }
 function goLadder(){
@@ -3789,6 +3981,18 @@ function renderGuild(){
     `<div>${i+1}. ${escapeHtml(row.display_name)} — ${Number(row.damage).toLocaleString()}</div>`).join('') || '<div class="dim">No damage logged yet.</div>';
   const dmgByName = {};
   social.board.forEach(row=>{ dmgByName[row.display_name] = Number(row.damage); });
+
+  const gw = social.guildWar;
+  const gwMine = gw && social.guild && gw.guild_a===social.guild.id;
+  const gwMyScore = gw ? (gwMine ? gw.score_a : gw.score_b) : 0;
+  const gwOppScore = gw ? (gwMine ? gw.score_b : gw.score_a) : 0;
+  const gwOppName = gw ? (gwMine ? gw.guild_b_name : gw.guild_a_name) : '';
+  const gwOppTag = gw ? (gwMine ? gw.guild_b_tag : gw.guild_a_tag) : '';
+  const gwEnded = gw && Date.parse(gw.ends_at) <= Date.now();
+  const gwErrMsg = social.guildWarError ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.guildWarError)}</p>` : '';
+  const gwStatusMsg = social.guildWarStatus ? `<p style="color:var(--gold)">${escapeHtml(social.guildWarStatus)}</p>` : '';
+  const gwBoard = (social.guildWarBoard||[]).map((row,i)=>
+    `<div>${i+1}. ${escapeHtml(row.display_name)} — ${Number(row.score).toLocaleString()}</div>`).join('') || '<div class="dim">No score logged yet.</div>';
 
   const lvl = guildLevel(), next = guildXpNext();
   const perkRows = Object.keys(GUILD_PERKS).map(l=>{
@@ -3888,6 +4092,31 @@ function renderGuild(){
       : `<p class="dim">No boss is active. Summon one and the whole guild can attack it.</p>
          <button class="btn primary" ${social.busy?'disabled':''} onclick="doRaidStart()">Summon a raid boss</button>`}
   </div>
+  <div class="panel">
+    <h2 class="section">GUILD WAR</h2>
+    <p class="dim">Your guild against one other, matched at random — whoever racks up more battle score before the window closes wins. Sits next to the raid boss above rather than replacing it.</p>
+    ${gwErrMsg}
+    ${gwStatusMsg}
+    ${gw ? `
+      <div style="font-size:18px;">
+        <span style="color:var(--gold)">${escapeHtml(social.guild.name)}</span> ${Number(gwMyScore).toLocaleString()}
+        &nbsp;—&nbsp;
+        ${Number(gwOppScore).toLocaleString()} <span style="color:var(--danger)">${escapeHtml(gwOppName)} [${escapeHtml(gwOppTag)}]</span>
+      </div>
+      ${gwEnded
+        ? `<p style="color:var(--gold)">${gwMyScore===gwOppScore ? 'War over — a draw.' : (gwMyScore>gwOppScore ? 'War over — your guild won!' : 'War over — ' + escapeHtml(gwOppName) + ' won this one.')}</p>
+           <button class="btn primary" ${social.guildWarBusy?'disabled':''} onclick="doGuildWarStart()">Queue for another war</button>`
+        : `<p class="dim">Ends in ${timeUntil(gw.ends_at)}.</p>
+           <button class="btn primary" ${social.guildWarBusy?'disabled':''} onclick="startGuildWarRun()">⚔ Fight for the war</button>`}
+      <div style="margin-top:12px;">
+        <div class="dim">Score board</div>
+        <div class="testbox">${gwBoard}</div>
+      </div>`
+      : (social.guildWarQueued
+          ? `<p class="dim">Queued — waiting for another guild to be matched against.</p>`
+          : `<p class="dim">No war is active. Queue up and the game matches you against the next guild that does the same.</p>
+             <button class="btn primary" ${social.guildWarBusy?'disabled':''} onclick="doGuildWarStart()">Declare war</button>`)}
+  </div>
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
 
@@ -3901,6 +4130,20 @@ function timeAgo(iso){
   if(hrs < 24) return hrs+' hr ago';
   const days = Math.round(hrs/24);
   return days+' day'+(days===1?'':'s')+' ago';
+}
+/* Same idea as timeAgo, pointed at the future — used for a Guild War's
+   "ends in" countdown, which is otherwise the only clock in the game that
+   counts down rather than up. */
+function timeUntil(iso){
+  const t = Date.parse(iso);
+  if(!t) return 'soon';
+  const mins = Math.max(0, Math.round((t-Date.now())/60000));
+  if(mins < 1) return 'any moment now';
+  if(mins < 60) return mins+' min';
+  const hrs = Math.round(mins/60);
+  if(hrs < 24) return hrs+' hr';
+  const days = Math.round(hrs/24);
+  return days+' day'+(days===1?'':'s');
 }
 function doGuildRefresh(){
   social.busy=true; render();
@@ -3940,10 +4183,28 @@ function doRaidStart(){
 function startRaidRun(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.status='Assign a formation first.'; render(); return; }
-  state.raidRun = true; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null;
+  state.raidRun = true; state.worldBossRun = false; state.guildWarRun = false; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null;
   beginBattle();
 }
 function endRaidRun(){ state.raidRun=false; state.battle=null; state.screen='guild'; render(); raidFetch().then(()=>render()); }
+function doGuildWarStart(){
+  if(social.guildWarBusy) return;
+  social.guildWarBusy=true; render();
+  guildWarStart().then(r=>{
+    social.guildWarBusy=false;
+    social.guildWarStatus = r.ok
+      ? (r.matched ? 'Matched! The war has begun.' : 'Queued — waiting for an opponent guild.')
+      : ('Could not queue: '+(r.error||'unknown error'));
+    render();
+  });
+}
+function startGuildWarRun(){
+  const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+  if(!filled){ social.guildWarStatus='Assign a formation first.'; render(); return; }
+  state.guildWarRun = true; state.raidRun = false; state.worldBossRun = false; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null;
+  beginBattle();
+}
+function endGuildWarRun(){ state.guildWarRun=false; state.battle=null; state.screen='guild'; render(); guildWarFetch().then(()=>render()); }
 
 /* ============ ONLINE NOW ============ */
 function renderOnline(){
@@ -3963,6 +4224,61 @@ function renderOnline(){
   <div class="panel">
     <h2 class="section">${social.online.length} COMMANDER${social.online.length===1?'':'S'} ONLINE</h2>
     <div class="testbox">${rows}</div>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
+/* ============ WORLD BOSS ============ */
+function goWorldBoss(){
+  state.screen='worldboss'; social.worldBossStatus=''; render();
+  if(!signedIn()) return;
+  worldBossFetch().then(()=>render());
+}
+function doWorldBossStart(){
+  if(social.worldBossBusy) return;
+  social.worldBossBusy=true; render();
+  worldBossStart().then(r=>{
+    social.worldBossBusy=false;
+    social.worldBossStatus = r.ok ? 'A new World Boss rises.' : ('Could not summon: '+(r.error||'unknown error'));
+    render();
+  });
+}
+function startWorldBossRun(){
+  const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+  if(!filled){ social.worldBossStatus='Assign a formation first.'; render(); return; }
+  state.worldBossRun = true; state.raidRun=false; state.guildWarRun=false; state.duel=null; state.trial=null; state.redeploy=null; state.detour=null;
+  beginBattle();
+}
+function endWorldBossRun(){ state.worldBossRun=false; state.battle=null; state.screen='worldboss'; render(); worldBossFetch().then(()=>render()); }
+function renderWorldBoss(){
+  if(!signedIn()) return needAccountPanel('WORLD BOSS');
+  const errMsg = social.worldBossError ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.worldBossError)}</p>` : '';
+  const statusMsg = social.worldBossStatus ? `<p style="color:var(--gold)">${escapeHtml(social.worldBossStatus)}</p>` : '';
+  const w = social.worldBoss;
+  const pctHp = (w && w.max_hp>0) ? Math.max(0, Math.round((w.hp / w.max_hp) * 100)) : 0;
+  const board = (social.worldBossBoard||[]).map((row,i)=>
+    `<div>${i+1}. ${escapeHtml(row.display_name)} — ${Number(row.damage).toLocaleString()}</div>`).join('') || '<div class="dim">No damage logged yet.</div>';
+  return `
+  <div class="panel">
+    <h2 class="section">WORLD BOSS</h2>
+    <p class="dim">One boss, shared by every commander on the server — not just your guild. Everyone's damage stacks on the same HP pool.</p>
+    ${errMsg}
+    ${statusMsg}
+    ${w ? `
+      <div style="font-size:22px; color:var(--danger)">☠ ${escapeHtml(w.name)}</div>
+      <div class="gauge-bg" style="height:18px; margin-top:6px;"><div class="gauge-fill" style="width:${pctHp}%; background:linear-gradient(90deg,#8b1a2b,var(--danger));"></div></div>
+      <div class="dim">${Number(w.hp).toLocaleString()} / ${Number(w.max_hp).toLocaleString()} HP${w.defeated_at?' — DEFEATED':''}</div>
+      ${w.defeated_at
+        ? `<p style="color:var(--gold)">${w.last_hit_by?escapeHtml(w.last_hit_by)+' landed the finishing blow. ':''}The server brought it down. Summon the next one whenever you like.</p>
+           <button class="btn primary" ${social.worldBossBusy?'disabled':''} onclick="doWorldBossStart()">Summon the next World Boss</button>`
+        : `<p class="dim" style="margin-top:8px;">Fight it with your current formation. All the damage you deal is logged, win or lose — it does not reset between attempts, and everyone's damage stacks.</p>
+           <button class="btn primary" ${social.worldBossBusy?'disabled':''} onclick="startWorldBossRun()">⚔ Attack the World Boss</button>`}
+      <div style="margin-top:12px;">
+        <div class="dim">Damage board</div>
+        <div class="testbox">${board}</div>
+      </div>`
+      : `<p class="dim">No World Boss is active right now.</p>
+         <button class="btn primary" ${social.worldBossBusy?'disabled':''} onclick="doWorldBossStart()">Summon the World Boss</button>`}
   </div>
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
@@ -4015,7 +4331,7 @@ function startDuel(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.status='Assign a formation first.'; render(); return; }
   state.duel = { userId: opp.user_id, name: opp.display_name, formation: opp.formation || {units:[]} };
-  state.raidRun = false; state.trial = null; state.redeploy = null; state.detour = null;
+  state.raidRun = false; state.worldBossRun = false; state.guildWarRun = false; state.trial = null; state.redeploy = null; state.detour = null;
   social.lastDuel = null;
   beginBattle();
 }
@@ -4031,6 +4347,14 @@ function renderLegionId(){
       <div class="dim" style="font-size:13px;">${has?(on?'on your banner — tap to remove':'tap to add'):'Install this part on a beast to unlock it.'}</div>
     </div>`;
   }).join('');
+  const badgesHave = state.badgesUnlocked||[];
+  const badgeChips = Object.keys(BADGES).map(k=>{
+    const B = BADGES[k], has = badgesHave.indexOf(k)>=0, on = state.badge===k;
+    return `<div class="pcard ${on?'selected':''}" style="width:150px; ${has?'cursor:pointer;':'cursor:default; opacity:0.35;'}" ${has?`onclick="toggleBadge('${k}')"`:''}>
+      <div class="pname">${has?B.emoji+' '+escapeHtml(B.name):'🔒 ???'}</div>
+      <div class="dim" style="font-size:13px;">${has?(on?'worn — tap to remove':'tap to wear'):escapeHtml(B.desc)}</div>
+    </div>`;
+  }).join('');
   return `
   <div class="panel">
     <h2 class="section">LEGION IDENTITY</h2>
@@ -4040,6 +4364,8 @@ function renderLegionId(){
     <button class="btn" style="margin-top:8px;" onclick="doSaveLegionName()">Save name</button>
     <div class="dim" style="font-size:16px; margin-top:18px;">Banner — pick up to 3 unlocked salvage parts</div>
     <div class="row" style="margin-top:6px;">${chips}</div>
+    <div class="dim" style="font-size:16px; margin-top:18px;">Badge — one earned mark, worn ahead of everything else</div>
+    <div class="row" style="margin-top:6px;">${badgeChips}</div>
     <p class="dim" style="margin-top:12px; font-size:15px;">Preview:
       <span style="color:var(--gold); font-size:19px;">${escapeHtml(legionBanner())}</span>
     </p>
@@ -4986,7 +5312,7 @@ function renderFormation(){
    Since buildEnemyUnits/buildPlayerUnits are randomized, this is a read on
    one likely draw, not a guarantee of the exact team the fight will use. */
 function previewFirstThreat(){
-  if(state.duel || state.raidRun || state.trial) return null;
+  if(state.duel || state.raidRun || state.worldBossRun || state.guildWarRun || state.trial) return null;
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled) return null;
   const savedBattle = state.battle;
@@ -5471,6 +5797,219 @@ function renderTrophyCase(){
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
 
+/* ============ ATTENDANCE STREAK ============
+   A calendar-day counter, deliberately separate from state.streak (the
+   battle win streak above) — this one only cares whether you opened THIS
+   legion on consecutive UTC calendar days, not what happened once you did.
+   Like bestDepth/bestStreak/trophyAce, it lives per-legion and is reset by
+   initGame() for a brand-new legion but left untouched by Rebirth (Rebirth
+   already preserves every other "this legion's history" record). Checked
+   lazily from renderHub() — the same pattern ensureDailies() already uses —
+   rather than from a dedicated boot hook, so both a fresh legion and a
+   continued one pick it up the moment they land on the hub. */
+const ATTENDANCE_MS = 24*60*60*1000;
+function ensureAttendance(){
+  const today = todayKey();
+  if(state.lastLoginDay === today) return;
+  if(state.lastLoginDay){
+    const yesterday = dateKeyFor(new Date(Date.now() - ATTENDANCE_MS));
+    state.loginStreak = (state.lastLoginDay === yesterday) ? (state.loginStreak||0)+1 : 1;
+  } else {
+    state.loginStreak = 1;
+  }
+  state.lastLoginDay = today;
+  if(state.loginStreak > (state.bestLoginStreak||0)) state.bestLoginStreak = state.loginStreak;
+  checkBadgeUnlocks();
+  autosave();
+}
+
+/* ============ LEGION BANNERS (BADGES) ============
+   A second, achievement-gated glyph shown alongside the existing salvage-part
+   emblem — legionBanner() prepends it, so it travels through the exact same
+   shared display-name field into the guild roster, raid board, ladder and
+   Online Now with no new network surface at all. Unlike the emblem (up to 3
+   parts, freely toggled the moment a part is unlocked), a badge is a single
+   slot and permanent once earned: qualifying conditions are point-in-time
+   snapshots (bestLoginStreak, bestStreak, trophyAce/trophyVanguard) except
+   the ladder rank one, which is why that one is "ever cracked the top 10",
+   checked and locked in the moment it's observed, not "currently ranked". */
+const BADGES = {
+  streak3:     { emoji:'🔥',   name:'Regular',       desc:'Reach a 3-day login streak.' },
+  streak7:     { emoji:'🔥🔥',  name:'Dedicated',     desc:'Reach a 7-day login streak.' },
+  streak30:    { emoji:'🌟',   name:'Veteran',       desc:'Reach a 30-day login streak.' },
+  warstreak10: { emoji:'⚔',   name:'Hot Streak',    desc:'Win 10 stages in a row.' },
+  slayer:      { emoji:'🏆',   name:'Monster Slayer', desc:'Fell both a Rustbound Ace and a Vanguard.' },
+  ranked10:    { emoji:'👑',   name:'Ranked',        desc:'Crack the top 10 on the Ladder.' },
+};
+function checkBadgeUnlocks(){
+  const have = Array.isArray(state.badgesUnlocked) ? state.badgesUnlocked : (state.badgesUnlocked=[]);
+  const grant = k => { if(have.indexOf(k)<0) have.push(k); };
+  if((state.bestLoginStreak||0)>=3) grant('streak3');
+  if((state.bestLoginStreak||0)>=7) grant('streak7');
+  if((state.bestLoginStreak||0)>=30) grant('streak30');
+  if((state.bestStreak||0)>=10) grant('warstreak10');
+  if(state.trophyAce && state.trophyVanguard) grant('slayer');
+  if(typeof social.rank==='number' && social.rank>=1 && social.rank<=10) grant('ranked10');
+}
+function toggleBadge(k){
+  if(!BADGES[k] || (state.badgesUnlocked||[]).indexOf(k)<0) return;
+  state.badge = (state.badge===k) ? null : k;
+  autosave();
+  sfx('click');
+  render();
+}
+
+/* ============ BATTLE REPLAYS ============
+   A structured recap, not real video — "nothing fancy." Every field here
+   was already computed for something else: the formation snapshot and
+   power score are exactly what the Ladder already publishes (ladderSnapshot/
+   formationPower above), and the highlight lines are pulled straight out of
+   the War Journal entry endBattle() just wrote for this same fight, rather
+   than a new turn-by-turn recorder.
+
+   Captured automatically, at most one per battle, the same "permanent
+   high-water mark" way Trophy Case works (see noteTrophy) — a boss kill, a
+   new best win streak, or a new deepest reach, checked in that priority
+   order in endBattle()'s shared tail. Local replays are always visible,
+   signed in or not, same as the War Journal; only "Share" (pushing a copy
+   to the replays table below) needs an account, and so does browsing what
+   anyone else has shared — the same "every social surface needs sign-in"
+   rule Guild/Ladder/Online Now already follow (needAccountPanel). Like
+   bestStreak/bestDepth/badgesUnlocked, this is a permanent record: reset by
+   initGame() for a brand-new legion, left untouched by Rebirth. */
+const REPLAY_CAP = 10;
+const REPLAY_KINDS = ['boss','streak','depth'];
+function replayEmoji(kind){ return kind==='boss' ? '💀' : (kind==='streak' ? '🔥' : '🗺️'); }
+function captureReplay(kind, label){
+  if(!state.battle) return;
+  const entry = state.journal && state.journal[0];
+  const highlights = (entry && typeof entry.text==='string')
+    ? entry.text.split(/(?<=[.!?])\s+/).filter(Boolean).slice(0,6) : [];
+  const rep = {
+    id: uid(), kind, label: String(label).slice(0,60), win: true,
+    stage: state.stage, deep: isDeep(state.stage),
+    boss: bossForStage(state.stage) ? bossForStage(state.stage).name : null,
+    power: formationPower(), formation: ladderSnapshot(),
+    highlights, at: Date.now(), shared: false,
+  };
+  state.replays = Array.isArray(state.replays) ? state.replays : [];
+  state.replays.unshift(rep);
+  if(state.replays.length > REPLAY_CAP) state.replays.length = REPLAY_CAP;
+}
+/* Defensive revival, same treatment as reviveJournal above — this
+   round-trips through localStorage like everything else in a save file. */
+function reviveReplayFormation(f){
+  if(!f || typeof f!=='object' || !Array.isArray(f.units)) return { units:[], blessing:null, stage:1 };
+  const units = f.units.filter(u=>u && typeof u==='object' && typeof u.name==='string' && typeof u.level==='number')
+    .map(u=>({ row: (u.row==='front'||u.row==='back') ? u.row : 'front',
+               speciesId: typeof u.speciesId==='string' ? u.speciesId : null,
+               level: Math.max(1, Math.floor(u.level)||1),
+               tier: (u.tier===2||u.tier===3) ? u.tier : 1,
+               parts: Array.isArray(u.parts) ? u.parts.filter(k=>!!partInfo(k)) : [],
+               trait: (u.trait && TRAITS[u.trait.key]) ? u.trait : null,
+               name: String(u.name).slice(0,40) }))
+    .slice(0,6);
+  return { units, blessing: (typeof f.blessing==='string') ? f.blessing.slice(0,20) : null,
+           stage: (typeof f.stage==='number' && f.stage>=1) ? Math.floor(f.stage) : 1 };
+}
+function reviveReplays(list){
+  if(!Array.isArray(list)) return [];
+  return list.filter(r => r && typeof r==='object'
+      && REPLAY_KINDS.indexOf(r.kind)>=0
+      && typeof r.label==='string' && r.label
+      && typeof r.stage==='number' && isFinite(r.stage) && r.stage>=1)
+    .map(r => ({
+      id: typeof r.id==='string' ? r.id : uid(),
+      kind: r.kind,
+      label: r.label.slice(0,60),
+      win: r.win !== false,
+      stage: Math.max(1, Math.floor(r.stage)),
+      deep: r.deep === true,
+      boss: typeof r.boss==='string' ? r.boss.slice(0,40) : null,
+      power: (typeof r.power==='number' && isFinite(r.power) && r.power>=0) ? Math.floor(r.power) : 0,
+      formation: reviveReplayFormation(r.formation),
+      highlights: Array.isArray(r.highlights) ? r.highlights.filter(h=>typeof h==='string').map(h=>h.slice(0,200)).slice(0,6) : [],
+      at: (typeof r.at==='number' && isFinite(r.at)) ? r.at : Date.now(),
+      shared: r.shared === true,
+    }))
+    .slice(0, REPLAY_CAP);
+}
+function goReplays(){
+  state.screen = 'replays';
+  social.replayStatus = '';
+  sfx('click');
+  render();
+  if(signedIn()) communityReplaysFetch().then(()=>render());
+}
+function doShareReplay(id){
+  const rep = (state.replays||[]).find(r=>r.id===id);
+  if(!rep || rep.shared || social.replayBusy) return Promise.resolve();
+  social.replayBusy = true;
+  social.replayStatus = 'Sharing…';
+  render();
+  return shareReplay(id).then(r=>{
+    social.replayBusy = false;
+    if(r.ok){
+      rep.shared = true;
+      autosave();
+      social.replayStatus = 'Shared with the community.';
+      return communityReplaysFetch().then(()=>render());
+    } else {
+      social.replayStatus = 'Not shared: ' + (r.error || 'unknown error');
+      render();
+    }
+  });
+}
+function renderReplayCard(rep, remote){
+  const label = remote ? ((rep.data && rep.data.label) || 'Battle') : rep.label;
+  const kind = remote ? (rep.data && rep.data.kind) : rep.kind;
+  const stage = remote ? ((rep.data && rep.data.stage) || 1) : rep.stage;
+  const deep = remote ? !!(rep.data && rep.data.deep) : rep.deep;
+  const power = remote ? ((rep.data && rep.data.power) || 0) : rep.power;
+  const formation = remote ? (rep.data && rep.data.formation) : rep.formation;
+  const highlights = (remote ? (rep.data && rep.data.highlights) : rep.highlights) || [];
+  const units = (formation && Array.isArray(formation.units)) ? formation.units : [];
+  const unitLine = units.map(u=>escapeHtml(u.name)+' Lv'+u.level).join(', ') || '—';
+  const stageLabel = deep ? ('Depth '+deepDepth(stage)) : ('Stage '+stage);
+  const shareBtn = remote ? '' : (rep.shared
+      ? `<span class="dim">✓ shared</span>`
+      : (signedIn()
+          ? `<button class="btn small" ${social.replayBusy?'disabled':''} onclick="doShareReplay('${rep.id}')">📤 Share</button>`
+          : `<span class="dim">sign in to share</span>`));
+  return `
+  <div class="testbox" style="margin-bottom:8px;">
+    <div style="color:var(--gold)">${replayEmoji(kind)} ${escapeHtml(label)}${remote?(' — '+escapeHtml(rep.display_name||'Commander')):''}</div>
+    <div class="dim" style="font-size:14px;">${escapeHtml(stageLabel)} · power ${power} · ${unitLine}</div>
+    ${highlights.map(h=>`<div class="dim" style="font-size:13px; margin-top:2px;">${escapeHtml(h)}</div>`).join('')}
+    <div style="margin-top:6px;">${shareBtn}</div>
+  </div>`;
+}
+function renderReplays(){
+  const list = Array.isArray(state.replays) ? state.replays : [];
+  const cards = list.length ? list.map(r=>renderReplayCard(r,false)).join('')
+      : '<p class="dim">No notable battles captured yet. A boss kill, a new best win streak, or a new deepest reach saves one here automatically.</p>';
+  const statusMsg = social.replayStatus ? `<p style="color:var(--gold)">${escapeHtml(social.replayStatus)}</p>` : '';
+  const community = signedIn()
+    ? (social.replaysError
+        ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.replaysError)}</p>`
+        : ((social.replays||[]).length
+            ? social.replays.map(r=>renderReplayCard(r,true)).join('')
+            : '<p class="dim">Nobody has shared a replay yet.</p>'))
+    : `<p class="dim">Sign in to browse replays other commanders have shared.</p><button class="btn" onclick="goAccount()">👤 Sign in</button>`;
+  return `
+  <div class="panel">
+    <h2 class="section">BATTLE REPLAYS</h2>
+    <p class="dim">Your legion's best moments, saved automatically — nothing fancy, just the formation, the power score, and how it went.</p>
+    ${statusMsg}
+    ${cards}
+  </div>
+  <div class="panel">
+    <h2 class="section">COMMUNITY REPLAYS</h2>
+    ${community}
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
 /* ============ MONSTER NICKNAMES ============
    Rename any monster in your roster; the game quietly remembers a few
    milestones for it — kills, times fielded, a near-death survival — as a
@@ -5672,7 +6211,7 @@ const GAMBITS = {
 };
 const GAMBIT_IDS = Object.keys(GAMBITS);
 function isHardFight(stage){
-  if(state.duel || state.raidRun || state.trial || state.redeploy) return false;
+  if(state.duel || state.raidRun || state.worldBossRun || state.guildWarRun || state.trial || state.redeploy) return false;
   return !!bossForStage(stage) || isEliteStage(stage);
 }
 function rollGambitChoices(){
@@ -5889,7 +6428,7 @@ const REINFORCE_MIN_ROUND = 6;
 const REINFORCE_CHANCE = 0.3;
 const REINFORCE_STAT_MULT = 0.6;   // "smaller" — noticeably weaker than the wave itself, not a full-strength pile-on
 function reinforcementsEligible(){
-  if(state.duel || state.raidRun || state.trial || tutorialActive()) return false;
+  if(state.duel || state.raidRun || state.worldBossRun || state.guildWarRun || state.trial || tutorialActive()) return false;
   return !bossForStage(state.stage);
 }
 function maybeSpawnReinforcements(){
@@ -6802,7 +7341,7 @@ function benchRoster(){
   return state.roster.filter(m=>!deployed[m.uid]);
 }
 function applyFieldPromotions(){
-  if(state.duel || state.raidRun || state.trial) return [];
+  if(state.duel || state.raidRun || state.worldBossRun || state.guildWarRun || state.trial) return [];
   const b = state.battle;
   const startBench = b && b.benchAtStart;
   const notes = [];
@@ -6871,6 +7410,32 @@ function endBattle(result){
     render();
     raidContribute(dealt).then(r=>{
       social.status = r.ok ? `Logged ${dealt} damage to the raid.` : ('Damage not logged: ' + (r.error||'unknown error'));
+      if(state.screen==='result') render();
+    });
+    return;
+  }
+
+  if(state.worldBossRun){
+    const won = result==='win';
+    const dealt = computeWorldBossDamage(b);
+    state.lastResult = { win:won, worldBoss:true, dealt, dailyDone };
+    state.screen = 'result';
+    render();
+    worldBossContribute(dealt).then(r=>{
+      social.worldBossStatus = r.ok ? `Logged ${dealt} damage to the World Boss.` : ('Damage not logged: ' + (r.error||'unknown error'));
+      if(state.screen==='result') render();
+    });
+    return;
+  }
+
+  if(state.guildWarRun){
+    const won = result==='win';
+    const scored = computeWarScore(b, result);
+    state.lastResult = { win:won, guildWar:true, scored, dailyDone };
+    state.screen = 'result';
+    render();
+    guildWarContribute(scored).then(r=>{
+      social.guildWarStatus = r.ok ? `Logged ${scored} points for the guild war.` : ('Score not logged: ' + (r.error||'unknown error'));
       if(state.screen==='result') render();
     });
     return;
@@ -7026,6 +7591,16 @@ function endBattle(result){
   journalAdd(battleJournalEntry(result));
   if(portrait && state.journal[0]) state.journal[0].portrait = portrait;
   if(state.lastResult) state.lastResult.portrait = portrait;
+  // Battle Replays: at most one capture per battle, in priority order —
+  // see the BATTLE REPLAYS block above for why each check reads the way
+  // it does (bestStreak/bestDepth haven't been bumped for THIS win yet
+  // when the streak/depth checks run, so ">" here really does mean "new").
+  if(result==='win'){
+    const bossHere = bossForStage(state.stage);
+    if(bossHere) captureReplay('boss', bossHere.name + ' felled');
+    else if(state.streak>=3 && state.streak===state.bestStreak) captureReplay('streak', state.streak + '-win streak');
+    else if(isDeep(state.stage) && deepDepth(state.stage) > (state.bestDepth||0)) captureReplay('depth', 'Depth ' + deepDepth(state.stage) + ' reached');
+  }
   if(state.detour && state.lastResult){
     const det = CAMPAIGN_DETOURS.find(d=>d.id===state.detour.id);
     state.lastResult.detour = true;
@@ -7410,6 +7985,26 @@ function renderResult(){
       ${(r.raidDrops&&r.raidDrops.length)?`<p style="color:var(--rust)">⚙ Salvage Surge: ${r.raidDrops.map(d=>`<b>${PARTS[d.key].emoji} ${PARTS[d.key].name}</b>`).join(' + ')}</p>`:''}
       <p class="dim">${social.status?escapeHtml(social.status):'Logging damage…'}</p>
       <button class="btn primary" style="margin-top:10px;" onclick="endRaidRun()">Back to the Guild →</button>
+    </div>`;
+  }
+  if(r.worldBoss){
+    return `
+    <div class="panel" style="text-align:center;">
+      <h1 class="title" style="font-size:20px;">WORLD BOSS ATTEMPT</h1>
+      <p>You dealt <b>${r.dealt.toLocaleString()}</b> damage to the World Boss.</p>
+      <p class="dim">${r.win?'Your legion held the field.':'Your legion fell — the damage still counts.'}</p>
+      <p class="dim">${social.worldBossStatus?escapeHtml(social.worldBossStatus):'Logging damage…'}</p>
+      <button class="btn primary" style="margin-top:10px;" onclick="endWorldBossRun()">Back to the World Boss →</button>
+    </div>`;
+  }
+  if(r.guildWar){
+    return `
+    <div class="panel" style="text-align:center;">
+      <h1 class="title" style="font-size:20px;">GUILD WAR SORTIE</h1>
+      <p>You logged <b>${r.scored.toLocaleString()}</b> points for your guild.</p>
+      <p class="dim">${r.win?'Your legion held the field.':'Your legion fell — a losing fight still scores, just less.'}</p>
+      <p class="dim">${social.guildWarStatus?escapeHtml(social.guildWarStatus):'Logging score…'}</p>
+      <button class="btn primary" style="margin-top:10px;" onclick="endGuildWarRun()">Back to the Guild →</button>
     </div>`;
   }
   if(r.trial){

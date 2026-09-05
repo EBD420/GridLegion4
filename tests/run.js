@@ -82,6 +82,10 @@ const SUITES = [
   { label:'trophy-case',        harness:'dom-storage-server.js', assert:true, files:['46-trophy-case.js'] },
   { label:'monster-nicknames',  harness:'dom-storage-server.js', assert:true, files:['47-monster-nicknames.js'] },
   { label:'online-now',         harness:'dom-storage-server.js', assert:true, files:['48-online-now.js'] },
+  { label:'attendance-banners', harness:'dom-storage-server.js', assert:true, files:['49-attendance-banners.js'] },
+  { label:'battle-replays',     harness:'dom-storage-server.js', assert:true, files:['50-battle-replays.js'] },
+  { label:'world-boss',         harness:'dom-storage-server.js', assert:true, files:['51-world-boss.js'] },
+  { label:'guild-wars',         harness:'dom-storage-server.js', assert:true, files:['52-guild-wars.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

@@ -83,6 +83,10 @@ run scavenger-caravan   dom-storage-server.js "$H/assert.js" "$S/45-scavenger-ca
 run trophy-case         dom-storage-server.js "$H/assert.js" "$S/46-trophy-case.js"
 run monster-nicknames   dom-storage-server.js "$H/assert.js" "$S/47-monster-nicknames.js"
 run online-now          dom-storage-server.js "$H/assert.js" "$S/48-online-now.js"
+run attendance-banners  dom-storage-server.js "$H/assert.js" "$S/49-attendance-banners.js"
+run battle-replays      dom-storage-server.js "$H/assert.js" "$S/50-battle-replays.js"
+run world-boss          dom-storage-server.js "$H/assert.js" "$S/51-world-boss.js"
+run guild-wars          dom-storage-server.js "$H/assert.js" "$S/52-guild-wars.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

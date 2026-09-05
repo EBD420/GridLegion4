@@ -296,9 +296,47 @@ themed username on the spot instead of leaving it as the default "Legion", so
 it shows up here — and on the guild roster, the raid board and the ladder,
 which already share that one name — as something worth reading.
 
+**Attendance Streak.** A calendar-day counter, separate from the battle win streak —
+this one only tracks whether the legion was opened on consecutive UTC days. Checked
+the moment the Hub renders, so it advances on its own with no extra step. A permanent
+best mark survives resets and Legion Rebirth, the same as the Trophy Case's other
+high-water marks.
+
+**Legion Banners.** A second, achievement-gated glyph shown alongside the existing
+salvage-part emblem, worn from the Legion Identity screen and carried through
+`legionBanner()` into every surface that already shows it — the guild roster, the
+raid board, the ladder and Online Now. Earned permanently by hitting login-streak
+milestones, a 10-win battle streak, felling both a Rustbound Ace and a Vanguard, or
+ever cracking the Ladder's top 10 — no new network surface, since it rides the exact
+same display-name field everything else already sends.
+
+**Battle Replays.** A win worth remembering — felling a boss, hitting a new best win
+streak, or reaching a new Deep record — quietly captures itself: the formation
+fielded, the power score, and a highlight line pulled straight from that battle's own
+War Journal entry. Up to ten are kept locally, oldest dropped first, and any of them
+can be shared to a small public feed the rest of the server can browse — one-way and
+opt-in, nothing is shared automatically.
+
+**World Boss.** A single shared monster, server-wide rather than per-guild, with a
+big HP pool that scales up each time one falls. Any signed-in commander can summon
+one when none is active and take a normal battle against it; the damage that fight
+would have dealt gets logged to the boss's HP instead of ending the campaign fight,
+capped per hit so one report can't finish it alone. A public damage board credits
+who's actually been landing hits, and whoever lands the killing blow gets named on
+the victory screen.
+
+**Guild Wars.** A timed, guild-versus-guild score race, layered on top of the guild
+system rather than replacing the raid boss or council vote. Declaring war queues a
+guild for an opponent; the next guild to queue is matched against it immediately,
+nobody waits twice. Every battle fought while a war is active reports its score to
+your guild's side instead of the campaign — a win worth more than a loss, but a loss
+still counts for something — and once the clock runs out, the higher score wins,
+visible to both sides with an honest draw if it's ever exactly tied.
+
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
-council vote, a shared raid boss, an asynchronous PvP ladder, and a shared list of
-who's active right now. All of it is off until configured, and the single-player
+council vote, a shared raid boss and a server-wide World Boss, an asynchronous PvP
+ladder, timed guild-vs-guild Wars, a shareable Battle Replay feed, and a shared list
+of who's active right now. All of it is off until configured, and the single-player
 game never depends on it.
 
 ## Optional backend
@@ -320,7 +358,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2381 assertions, no dependencies beyond `node`. The suites extract the script out of
+2561 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

@@ -632,6 +632,289 @@ document already makes.
 
 ---
 
+## Step 7 — battle replays
+
+**Optional, and independent of every step above.** Battle Replays capture
+locally the moment they happen (a boss kill, a new best win streak, a new
+deepest reach) and are always visible without an account — this step only
+adds the "Share" button, which copies one replay to a table other signed-in
+players can browse. Safe to run more than once.
+
+```sql
+create table public.replays (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  display_name text not null,
+  data jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.replays enable row level security;
+
+-- Same shape as the ladder/presence policies above: readable by anyone
+-- signed in, writable only into your own row.
+create policy "replays are readable by any signed-in player"
+  on public.replays for select to authenticated using (true);
+
+create policy "players can only save their own replays"
+  on public.replays for insert to authenticated with check (auth.uid() = user_id);
+
+grant select, insert on public.replays to authenticated;
+```
+
+Then reload the schema cache the same way as before:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+This one needs no function — sharing a replay has no server-side arithmetic
+to protect (no HP pool, no rating), so the client inserts the row directly,
+the same way cloud saves already write straight to their own table.
+
+---
+
+## Step 8 — world boss
+
+**Optional, and independent of every step above** — this is not guild-scoped,
+so it works even for a player who has never joined a guild. One shared boss,
+one shared damage pool, every signed-in player can attack it. Reuses the
+raid-contribution trick from step 2 almost exactly — see `contribute_raid`
+there if you want the side-by-side comparison — just pointed at a single
+global row instead of a per-guild one.
+
+```sql
+create table public.world_boss (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  max_hp      bigint not null check (max_hp > 0),
+  hp          bigint not null check (hp >= 0),
+  started_at  timestamptz not null default now(),
+  defeated_at timestamptz,
+  last_hit_by text
+);
+
+create table public.world_boss_damage (
+  boss_id      uuid not null references public.world_boss(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  display_name text not null,
+  damage       bigint not null default 0,
+  primary key (boss_id, user_id)
+);
+
+alter table public.world_boss        enable row level security;
+alter table public.world_boss_damage enable row level security;
+
+create policy "world boss is public to signed-in players"
+  on public.world_boss for select to authenticated using (true);
+
+create policy "world boss damage board is public to signed-in players"
+  on public.world_boss_damage for select to authenticated using (true);
+
+-- No insert/update policy on either table, same reasoning as raid_bosses/
+-- raid_damage in step 1: all writes go through the functions below.
+grant select on public.world_boss, public.world_boss_damage to authenticated;
+
+-- Seeds a first boss so a fresh project has something active immediately.
+-- Safe to run more than once — it only inserts when the table is empty.
+insert into public.world_boss (name, max_hp, hp)
+select 'Rustbound Sovereign', 300000, 300000
+where not exists (select 1 from public.world_boss);
+
+-- Anyone can summon the next one once the current boss is down. HP scales
+-- with how many have already fallen — a light difficulty ramp with no
+-- guild size to key off, since this isn't guild-scoped.
+create or replace function public.start_world_boss()
+returns uuid language plpgsql security definer set search_path = public as $$
+declare n int; boss_hp bigint; b_id uuid;
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  if exists (select 1 from world_boss where defeated_at is null)
+    then raise exception 'a world boss is already active'; end if;
+  select count(*) into n from world_boss where defeated_at is not null;
+  boss_hp := 300000 + n * 150000;
+  insert into world_boss (name, max_hp, hp)
+    values ('Rustbound Sovereign', boss_hp, boss_hp)
+    returning id into b_id;
+  return b_id;
+end $$;
+
+create or replace function public.contribute_world_boss(p_damage bigint, p_display text)
+returns table (remaining bigint, contributed bigint)
+language plpgsql security definer set search_path = public as $$
+declare b_id uuid; dmg bigint;
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  select id into b_id from world_boss where defeated_at is null
+    order by started_at desc limit 1;
+  if b_id is null then raise exception 'no active world boss'; end if;
+
+  dmg := least(greatest(coalesce(p_damage,0), 0), 20000);
+
+  update world_boss
+     set hp = greatest(0, hp - dmg),
+         defeated_at = case when hp - dmg <= 0 then now() else defeated_at end,
+         last_hit_by = case when hp - dmg <= 0 then coalesce(nullif(p_display,''),'Commander') else last_hit_by end
+   where id = b_id
+   returning hp into remaining;
+
+  insert into world_boss_damage (boss_id, user_id, display_name, damage)
+    values (b_id, auth.uid(), coalesce(nullif(p_display,''),'Commander'), dmg)
+    on conflict (boss_id, user_id)
+    do update set damage = world_boss_damage.damage + dmg,
+                  display_name = excluded.display_name;
+
+  contributed := dmg;
+  return next;
+end $$;
+```
+
+Then reload the schema cache the same way as before:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+---
+
+## Step 9 — guild wars
+
+**Needs the guild-hall upgrade (step 4).** Two guilds go head-to-head over a
+fixed window instead of guild-vs-boss — a small queue table pairs up whichever
+two guilds ask for a match, then both race to the higher battle score before
+the window closes. Sits next to the raid boss rather than replacing it.
+
+```sql
+create table public.guild_war_queue (
+  guild_id  uuid primary key references public.guilds(id) on delete cascade,
+  queued_at timestamptz not null default now()
+);
+
+create table public.guild_wars (
+  id           uuid primary key default gen_random_uuid(),
+  guild_a      uuid not null references public.guilds(id) on delete cascade,
+  guild_b      uuid not null references public.guilds(id) on delete cascade,
+  guild_a_name text not null,
+  guild_a_tag  text not null,
+  guild_b_name text not null,
+  guild_b_tag  text not null,
+  score_a      bigint not null default 0,
+  score_b      bigint not null default 0,
+  starts_at    timestamptz not null default now(),
+  ends_at      timestamptz not null
+);
+
+create table public.guild_war_contributions (
+  war_id       uuid not null references public.guild_wars(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  display_name text not null,
+  score        bigint not null default 0,
+  primary key (war_id, user_id)
+);
+
+alter table public.guild_war_queue         enable row level security;
+alter table public.guild_wars              enable row level security;
+alter table public.guild_war_contributions enable row level security;
+
+-- Reuses the my_guild_id() helper from step 1 throughout, same reasoning as
+-- the guild council policy in step 5.
+create policy "a guild can see whether it is queued"
+  on public.guild_war_queue for select to authenticated
+  using (guild_id = public.my_guild_id());
+
+create policy "guilds see their own war"
+  on public.guild_wars for select to authenticated
+  using (guild_a = public.my_guild_id() or guild_b = public.my_guild_id());
+
+create policy "guilds see their war contributions"
+  on public.guild_war_contributions for select to authenticated
+  using (war_id in (
+    select id from public.guild_wars
+    where guild_a = public.my_guild_id() or guild_b = public.my_guild_id()));
+
+grant select on public.guild_war_queue, public.guild_wars, public.guild_war_contributions to authenticated;
+
+-- Queues your guild for a war, or immediately matches you against whoever
+-- is already waiting. Returns the war id once matched, or null while you
+-- are the one waiting.
+create or replace function public.start_guild_war()
+returns uuid language plpgsql security definer set search_path = public as $$
+declare g_id uuid; my_name text; my_tag text; opp_id uuid; opp_name text; opp_tag text; w_id uuid;
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  select guild_id into g_id from guild_members where user_id = auth.uid();
+  if g_id is null then raise exception 'you are not in a guild'; end if;
+
+  select id into w_id from guild_wars
+    where (guild_a = g_id or guild_b = g_id) and ends_at > now()
+    limit 1;
+  if w_id is not null then return w_id; end if;
+
+  select name, tag into my_name, my_tag from guilds where id = g_id;
+
+  select guild_id into opp_id from guild_war_queue where guild_id <> g_id order by queued_at asc limit 1;
+  if opp_id is not null then
+    select name, tag into opp_name, opp_tag from guilds where id = opp_id;
+    delete from guild_war_queue where guild_id in (g_id, opp_id);
+    insert into guild_wars (guild_a, guild_b, guild_a_name, guild_a_tag, guild_b_name, guild_b_tag, ends_at)
+      values (g_id, opp_id, my_name, my_tag, opp_name, opp_tag, now() + interval '48 hours')
+      returning id into w_id;
+    return w_id;
+  end if;
+
+  insert into guild_war_queue (guild_id) values (g_id)
+    on conflict (guild_id) do update set queued_at = now();
+  return null;
+end $$;
+
+-- Same atomic-update trick as contribute_raid, just deciding which side of
+-- the ledger to add to based on which guild is calling.
+create or replace function public.contribute_guild_war(p_score bigint, p_display text)
+returns table (my_score bigint, opp_score bigint)
+language plpgsql security definer set search_path = public as $$
+declare g_id uuid; w record; amt bigint;
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  select guild_id into g_id from guild_members where user_id = auth.uid();
+  if g_id is null then raise exception 'you are not in a guild'; end if;
+
+  select * into w from guild_wars
+    where (guild_a = g_id or guild_b = g_id) and ends_at > now()
+    order by starts_at desc limit 1;
+  if w.id is null then raise exception 'no active guild war'; end if;
+
+  amt := least(greatest(coalesce(p_score,0), 0), 20000);
+
+  if w.guild_a = g_id then
+    update guild_wars set score_a = score_a + amt where id = w.id returning score_a, score_b into my_score, opp_score;
+  else
+    update guild_wars set score_b = score_b + amt where id = w.id returning score_b, score_a into my_score, opp_score;
+  end if;
+
+  insert into guild_war_contributions (war_id, user_id, display_name, score)
+    values (w.id, auth.uid(), coalesce(nullif(p_display,''),'Commander'), amt)
+    on conflict (war_id, user_id)
+    do update set score = guild_war_contributions.score + amt,
+                  display_name = excluded.display_name;
+
+  return next;
+end $$;
+```
+
+Then reload the schema cache the same way as before:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+There is deliberately no scheduled job to close out an expired war — the
+game itself compares `ends_at` to the current time and shows "war over" the
+moment anyone opens the Guild screen after the window passes, the same
+honest "poll, not real-time" trade-off Online Now already makes. Queuing
+again afterwards starts a fresh war.
+
+---
+
 ## How each feature behaves
 
 **Daily orders** — three objectives drawn from a date seed, so every player on a
@@ -665,7 +948,30 @@ moment it's created (see `generateUsername()` in the game), so it shows up here 
 and on the guild roster, the raid board and the ladder, all four already share the
 one display name — as something more distinctive than the default "Legion".
 
+**Battle replays** — up to 10 notable battles (a boss kill, a new best win streak,
+a new deepest reach) are captured automatically and kept locally, no account
+needed. Sharing one copies its formation, power score and highlight lines into
+a public feed any signed-in player can browse — a snapshot at share time, not a
+live link, and nothing here is simulated again or ever re-fought.
+
+**World boss** — one boss, one HP pool, shared by every signed-in player at
+once rather than scoped to a guild. Attack it with your current formation from
+the World Boss screen off the Hub; all damage counts, win or lose, and stacks
+with everyone else's. Once it falls, anyone can summon the next one, a little
+tougher than the last.
+
+**Guild wars** — queue your guild from the Guild screen and the game matches
+you against the next guild that also queues. For 48 hours, every battle you
+fight through **⚔ Fight for the war** adds to your guild's score (a win counts
+for more than a loss, but a loss still counts); whoever's total is higher when
+the window closes wins. No scheduled job closes it out — the game just checks
+the clock the next time anyone opens the Guild screen.
+
 ## Cost
 
 All of this is well inside Supabase's free tier. The heaviest table is `ladder`,
-at one row per player — `presence` is the same shape and just as light.
+at one row per player — `presence` is the same shape and just as light. `replays`
+only grows when a player explicitly shares something, so it stays smaller still.
+`world_boss`/`world_boss_damage` and the `guild_wars` family grow by one row per
+boss or per war, not per battle — attacking either only ever updates an existing
+row's counters.
