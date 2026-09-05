@@ -90,6 +90,8 @@ const SUITES = [
   { label:'replay-playback',    harness:'dom-storage-server.js', assert:true, files:['54-replay-playback.js'] },
   { label:'guild-projects',     harness:'dom-storage-server.js', assert:true, files:['55-guild-projects.js'] },
   { label:'black-market',       harness:'dom-storage-server.js', assert:true, files:['56-black-market.js'] },
+  { label:'field-companion',    harness:'dom-storage-server.js', assert:true, files:['57-field-companion.js'] },
+  { label:'the-undercroft',     harness:'dom-storage-server.js', assert:true, files:['58-the-undercroft.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

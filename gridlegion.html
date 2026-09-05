@@ -271,6 +271,7 @@
   .doctrine-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.08); }
   .caravan-banner{ font-size:16px; color:var(--gold); border:1px dashed var(--gold); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,178,56,0.08); }
   .black-market-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
+  .undercroft-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.10); }
   .threat-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .gauge-wrap{ margin-bottom:12px; }
   .gauge-label{ font-size:14px; color:var(--gold); margin-bottom:3px; }
@@ -703,6 +704,29 @@ function grantDetourReward(det){
   return null;
 }
 
+/* ============ THE UNDERCROFT ============
+   Corruption's second consequence — the in-battle glitch/defect risk
+   (see corrTier/tickStatusStart) is the immediate one; this is the one
+   that shows up later. Once the roster's cumulative corruption (a live
+   sum, recomputed on demand — never stored) crosses a threshold, a hidden
+   stage opens at the Hub: a single, much tougher fight, one-time-claimable
+   exactly like a Campaign Map Detour (fixed anchor stage so it never
+   collides with a commander fight, permanent once claimed, untouched by
+   Rebirth), except gated on corruption instead of state.cleared. Winning
+   it earns a permanent Corruption Ward — a flat reduction folded straight
+   into monsterCorruption() below — so braving the depths is what actually
+   buys the roster some relief from the thing that opened the door. */
+const UNDERCROFT_THRESHOLD = 150;      // summed monsterCorruption() across the whole roster, right now
+const UNDERCROFT_STAT_MULT = 1.5;      // meaner than a Detour's 1.3x — this is meant to hurt
+const UNDERCROFT_ANCHOR_STAGE = 8;     // fixed, non-boss — same trick as CAMPAIGN_DETOURS' afterStage
+const UNDERCROFT_WARD_REDUCTION = 15;  // permanent corruption reduction once the ward is earned
+function totalRosterCorruption(){
+  return (state.roster||[]).reduce((sum,m)=>sum+monsterCorruption(m), 0);
+}
+function undercroftAvailable(){
+  return !state.undercroftClaimed && totalRosterCorruption() >= UNDERCROFT_THRESHOLD;
+}
+
 /* ---- Daily scavenger missions. Purely local: date-seeded, so every
        player on a given day gets the same three, with no server needed. ---- */
 const MISSION_POOL = [
@@ -1010,6 +1034,62 @@ function acceptBlackMarketTrade(){
   state.blackMarketNextEligible = Date.now() + BLACK_MARKET_MIN_GAP_MS;
   autosave();
   render();
+}
+
+/* ============ FIELD COMPANION ============
+   A small, non-combat mascot that rides along with the legion — no
+   formation slot, no stats, nothing battle-critical. It levels up purely
+   from ordinary play: a shared XP pool fed by every stage battle that
+   reaches the same "shared tail" choke point the Caravan and Black Market
+   already tick from, plus a bonus whenever a genuinely new Deep depth
+   record is set. XP buys levels off a fixed cumulative-threshold table,
+   same shape as guildLevel(), and each level makes its one passive perk a
+   little stronger. Which perk it grants is fixed by which companion got
+   rolled — cosmetic variety over one shared mechanic, the same trick Ace/
+   Vanguard/Black-Market parts use for names. Rolled once at initGame() and
+   never re-rolled; like Trophy Case and Doctrine, a Rebirth never touches
+   it — the mascot's bond with the commander outlasts any one legion. ============================================= */
+const COMPANION_SPECIES = {
+  gearcat:    { name:'Gearcat',    emoji:'🐈‍⬛', desc:'A scrap-plated stray that follows the scent of fresh salvage.', perk:'salvage' },
+  mosschick:  { name:'Mosschick',  emoji:'🐥', desc:'Half-feather, half-filament — it studies every fight like homework.', perk:'exp' },
+  emberwhelp: { name:'Emberwhelp', emoji:'🦎', desc:'Warms itself at the nearest campfire and charms whoever built it.', perk:'favor' },
+};
+const COMPANION_IDS = Object.keys(COMPANION_SPECIES);
+const COMPANION_XP_PER_BATTLE = 4;       // any stage battle reaching the shared tail, win or lose
+const COMPANION_XP_PER_NEW_DEPTH = 6;    // a genuinely new Deep depth record, not a repeat visit
+const COMPANION_LEVEL_THRESHOLDS = [0, 40, 100, 200, 360]; // cumulative xp -> levels 1..5, same shape as GUILD_XP
+const COMPANION_PERK_BASE = 0.04;  // perk magnitude at level 1
+const COMPANION_PERK_STEP = 0.02;  // + per level above 1
+
+function companionLevel(xp){
+  let lvl = 1;
+  for(let i=1;i<COMPANION_LEVEL_THRESHOLDS.length;i++){ if((xp||0)>=COMPANION_LEVEL_THRESHOLDS[i]) lvl = i+1; }
+  return lvl;
+}
+/* The single read every render/reward site goes through — never poke
+   state.companion's fields directly outside addCompanionXp below. */
+function companionInfo(){
+  if(!state.companion) return null;
+  const sp = COMPANION_SPECIES[state.companion.speciesId];
+  if(!sp) return null;
+  const level = companionLevel(state.companion.xp||0);
+  return { speciesId: state.companion.speciesId, name: sp.name, emoji: sp.emoji, desc: sp.desc,
+           perk: sp.perk, level, xp: state.companion.xp||0, pct: COMPANION_PERK_BASE + (level-1)*COMPANION_PERK_STEP };
+}
+function companionPerkPct(kind){
+  const c = companionInfo();
+  return (c && c.perk===kind) ? c.pct : 0;
+}
+function addCompanionXp(n){
+  if(!state.companion) return;
+  state.companion.xp = (state.companion.xp||0) + n;
+}
+function companionPerkText(c){
+  if(!c) return '';
+  if(c.perk==='salvage') return `+${Math.round(c.pct*100)}% chance of a bonus salvage drop`;
+  if(c.perk==='exp')     return `+${Math.round(c.pct*100)}% EXP from every battle`;
+  if(c.perk==='favor')   return `+${Math.round(c.pct*100)}% favor from every battle`;
+  return '';
 }
 
 /* ---- Trials: replay a cleared stage under a modifier for salvage ---- */
@@ -2182,6 +2262,9 @@ function serializeSave(){
     caravanNextEligible: state.caravanNextEligible,
     blackMarket: state.blackMarket,
     blackMarketNextEligible: state.blackMarketNextEligible,
+    companion: state.companion,
+    undercroftClaimed: state.undercroftClaimed,
+    undercroftWard: state.undercroftWard,
     bestStreak: state.bestStreak,
     trophyAce: state.trophyAce,
     trophyVanguard: state.trophyVanguard,
@@ -2429,6 +2512,20 @@ function applySave(d, slot){
       && typeof d.blackMarket.expiresAt==='number' && isFinite(d.blackMarket.expiresAt))
     ? { key: d.blackMarket.key, expiresAt: d.blackMarket.expiresAt } : null;
   state.blackMarketNextEligible = (typeof d.blackMarketNextEligible==='number' && isFinite(d.blackMarketNextEligible)) ? d.blackMarketNextEligible : 0;
+  /* Field Companion: unlike the Caravan/Black Market offers, every legion
+     always has exactly one — so malformed or missing data degrades to a
+     freshly rolled companion at xp 0, never to null. */
+  state.companion = (d.companion && typeof d.companion==='object' && COMPANION_SPECIES[d.companion.speciesId]
+      && typeof d.companion.xp==='number' && isFinite(d.companion.xp) && d.companion.xp>=0)
+    ? { speciesId: d.companion.speciesId, xp: d.companion.xp }
+    : { speciesId: COMPANION_IDS[Math.floor(Math.random()*COMPANION_IDS.length)], xp: 0 };
+  /* The Undercroft: state.undercroft itself (mid-battle) is never persisted,
+     same treatment as state.detour above. The claim and the ward it grants
+     are simple permanent booleans, same "=== true" convention audio.music
+     already uses so non-boolean garbage degrades to false, not truthy. */
+  state.undercroft = null;
+  state.undercroftClaimed = d.undercroftClaimed === true;
+  state.undercroftWard = d.undercroftWard === true;
   /* Trophy Case: three permanent high-water marks (see noteTrophy / the win-
      streak update in endBattle's tail) — same "survives Rebirth" treatment
      as Doctrine, the Archive and bestDepth above (doRebirth never touches
@@ -2698,6 +2795,10 @@ function initGame(){
   state.detourSelected = null;
   state.mapStageSelected = null;
   state.campaignDetours = {};
+  state.undercroft = null;
+  state.undercroftClaimed = false;
+  state.undercroftWard = false;
+  state.companion = { speciesId: COMPANION_IDS[Math.floor(Math.random()*COMPANION_IDS.length)], xp: 0 };
   state.lastFusion = null;
   state.bestDepth = 0;
   state.confirmWipe = null;
@@ -2763,6 +2864,7 @@ function monsterCorruption(m){
   let c = ps.reduce((s,p)=>s+p.corruption,0) + (ps.length-1)*8;
   if(m.trait && m.trait.key==='scavenger') c = Math.max(0, c-10);
   if(codexBonusActive('parts')) c = Math.max(0, c - ps.length*2);
+  if(state.undercroftWard) c = Math.max(0, c - UNDERCROFT_WARD_REDUCTION);
   return c;
 }
 
@@ -3761,7 +3863,7 @@ function startTutorial(){
   state.intel = { history:[], wins:0 };
   state.stage = 1;
   state.tutorial = { step:0, done:false, seen:[] };
-  state.trial = null; state.duel = null; state.raidRun = false; state.worldBossRun = false; state.guildWarRun = false; state.redeploy = null; state.detour = null;
+  state.trial = null; state.duel = null; state.raidRun = false; state.worldBossRun = false; state.guildWarRun = false; state.redeploy = null; state.detour = null; state.undercroft = null;
   audioResume();
   beginBattle();
 }
@@ -3989,7 +4091,12 @@ function renderHub(){
       <button class="btn small ${blackMarketCanAfford(state.blackMarket)?'danger':''}" style="margin-top:4px;" ${blackMarketCanAfford(state.blackMarket)?'':'disabled'} onclick="acceptBlackMarketTrade()">Buy</button>
       ${blackMarketCanAfford(state.blackMarket)?'':'<span class="dim"> — can\'t make this trade right now.</span>'}
     </div>` : ''}
+    ${undercroftAvailable() ? `<div class="undercroft-banner">☣ <b>THE UNDERCROFT</b><br>
+      Your legion's own corruption has opened a way down — a much tougher fight waits below. Win it once and earn a permanent Corruption Ward.<br>
+      <button class="btn small" style="margin-top:4px; border-color:var(--wind); color:var(--wind);" onclick="beginUndercroft()">Descend</button>
+    </div>` : ''}
     ${AUGMENT_IDS.some(hasAugment) ? `<p class="dim">🎴 Augments: ${AUGMENT_IDS.filter(hasAugment).map(id=>AUGMENTS[id].name).join(', ')}</p>` : ''}
+    ${(function(){ const c=companionInfo(); return c ? `<p class="dim">${c.emoji} <b>${escapeHtml(c.name)}</b> (Lv.${c.level}) — ${companionPerkText(c)}</p>` : ''; })()}
     ${state.loginStreak>0 ? `<p class="dim">📅 Login streak: <b style="color:var(--gold)">${state.loginStreak}</b> day${state.loginStreak===1?'':'s'} running${state.bestLoginStreak>state.loginStreak?` (best ${state.bestLoginStreak})`:''}</p>` : ''}
   </div>
   <div class="panel">
@@ -4438,7 +4545,7 @@ function doRaidStart(){
 function startRaidRun(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.status='Assign a formation first.'; render(); return; }
-  state.raidRun = true; state.worldBossRun = false; state.guildWarRun = false; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null;
+  state.raidRun = true; state.worldBossRun = false; state.guildWarRun = false; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null; state.undercroft = null;
   beginBattle();
 }
 function endRaidRun(){ state.raidRun=false; state.battle=null; state.screen='guild'; render(); raidFetch().then(()=>render()); }
@@ -4456,7 +4563,7 @@ function doGuildWarStart(){
 function startGuildWarRun(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.guildWarStatus='Assign a formation first.'; render(); return; }
-  state.guildWarRun = true; state.raidRun = false; state.worldBossRun = false; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null;
+  state.guildWarRun = true; state.raidRun = false; state.worldBossRun = false; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null; state.undercroft = null;
   beginBattle();
 }
 function endGuildWarRun(){ state.guildWarRun=false; state.battle=null; state.screen='guild'; render(); guildWarFetch().then(()=>render()); }
@@ -4518,7 +4625,7 @@ function doWorldBossStart(){
 function startWorldBossRun(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.worldBossStatus='Assign a formation first.'; render(); return; }
-  state.worldBossRun = true; state.raidRun=false; state.guildWarRun=false; state.duel=null; state.trial=null; state.redeploy=null; state.detour=null;
+  state.worldBossRun = true; state.raidRun=false; state.guildWarRun=false; state.duel=null; state.trial=null; state.redeploy=null; state.detour=null; state.undercroft=null;
   beginBattle();
 }
 function endWorldBossRun(){ state.worldBossRun=false; state.battle=null; state.screen='worldboss'; render(); worldBossFetch().then(()=>render()); }
@@ -4603,7 +4710,7 @@ function startDuel(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.status='Assign a formation first.'; render(); return; }
   state.duel = { userId: opp.user_id, name: opp.display_name, formation: opp.formation || {units:[]} };
-  state.raidRun = false; state.worldBossRun = false; state.guildWarRun = false; state.trial = null; state.redeploy = null; state.detour = null;
+  state.raidRun = false; state.worldBossRun = false; state.guildWarRun = false; state.trial = null; state.redeploy = null; state.detour = null; state.undercroft = null;
   social.lastDuel = null;
   beginBattle();
 }
@@ -4932,6 +5039,22 @@ function beginDetour(id){
 function endDetour(){
   state.stage = state.stageBeforeDetour || state.stage;
   state.detour = null;
+  state.battle = null;
+  state.screen = 'hub';
+  autosave();
+  render();
+}
+function beginUndercroft(){
+  if(!undercroftAvailable()) return;
+  state.undercroft = true;
+  state.stageBeforeUndercroft = state.stage;
+  state.stage = UNDERCROFT_ANCHOR_STAGE;
+  beginBattle();
+  logMsg('☣ The Undercroft opens beneath you — the rust has found a way in.');
+}
+function endUndercroft(){
+  state.stage = state.stageBeforeUndercroft || state.stage;
+  state.undercroft = null;
   state.battle = null;
   state.screen = 'hub';
   autosave();
@@ -5904,6 +6027,7 @@ function buildEnemyUnits(stage, terrain, adapted, usePlating, platingElem){
   let mult = 1 + (stage-1)*0.14;
   if(isEliteStage(stage)) mult *= 1.25;
   if(state.detour) mult *= DETOUR_STAT_MULT;
+  if(state.undercroft) mult *= UNDERCROFT_STAT_MULT;
   const units = [];
   for(let i=0;i<count;i++){
     const id = pickEnemySpecies(adapted);
@@ -8015,7 +8139,7 @@ function endBattle(result){
   }
 
   if(result==='win'){
-    const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1) * (commanderHasPerk('exp_all') ? 1.05 : 1) * (codexBonusActive('enemies') ? 1.05 : 1));
+    const expGain = Math.round(stageExp() * (bossForStage(state.stage) ? 1.75 : 1) * (hasPerk('exp') ? 1.10 : 1) * (commanderHasPerk('exp_all') ? 1.05 : 1) * (codexBonusActive('enemies') ? 1.05 : 1) * (1 + companionPerkPct('exp')));
     const levelled = awardExp(b.playerUnits, expGain);
 
     // --- Rustbound intel: they study what actually hurt them ---
@@ -8065,7 +8189,7 @@ function endBattle(result){
     b.playerUnits.forEach(u=>{
       (u.attackElements||[]).forEach(e=>{ if(TRIBES[e] && !favorGains[e]) favorGains[e] = 1; });
     });
-    Object.keys(favorGains).forEach(e=>addFavor(e, favorGains[e]));
+    Object.keys(favorGains).forEach(e=>addFavor(e, Math.round(favorGains[e]*(1+companionPerkPct('favor')))));
 
     // --- Salvage from the wreckage (elite waves are stripped twice over) ---
     const drops = [];
@@ -8073,7 +8197,7 @@ function endBattle(result){
     const pulls = (isEliteStage(state.stage) || isBossWin) ? 2 : 1;
     for(let d=0; d<pulls; d++){
       if(state.parts.length>=14) break;
-      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0) + WIN_STREAK_SALVAGE_PER*winStreakLevel() + (hasProject('vault')?0.08:0))) break;
+      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0) + WIN_STREAK_SALVAGE_PER*winStreakLevel() + (hasProject('vault')?0.08:0) + companionPerkPct('salvage'))) break;
       const keys = b.enemyUnits.map(u=>u.speciesKey).filter(Boolean);
       if(!keys.length) break;
       const drop = { uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] };
@@ -8138,6 +8262,9 @@ function endBattle(result){
   tickCaravan(Date.now());
   // The Black Market: same shared tail, same exclusions, own independent clock.
   tickBlackMarket(Date.now());
+  // Field Companion: same shared tail, same exclusions — "ordinary play"
+  // means a real stage battle reached the Hub again, not a duel or trial.
+  addCompanionXp(COMPANION_XP_PER_BATTLE);
   // Online Now: same shared tail, same exclusions — a fire-and-forget
   // heartbeat so a legion shows up as active from ordinary play, not only
   // when the player happens to have the Online Now screen open.
@@ -8168,6 +8295,14 @@ function endBattle(result){
         state.campaignDetours[det.id] = true;
         state.lastResult.detourReward = granted;
       }
+    }
+  }
+  if(state.undercroft && state.lastResult){
+    state.lastResult.undercroft = true;
+    if(result==='win' && !state.undercroftClaimed){
+      state.undercroftClaimed = true;
+      state.undercroftWard = true;
+      state.lastResult.undercroftReward = `☣ Corruption Ward earned — the whole legion runs ${UNDERCROFT_WARD_REDUCTION} rust cooler, permanently.`;
     }
   }
   const cmdLevelled = commanderAddXp(result==='win' ? (20 + state.stage*2) : (5 + Math.floor(state.stage/2)));
@@ -8481,6 +8616,7 @@ function renderBattle(){
     ${state.trial?`<div class="boss-banner">☠ TRIAL — ${state.trial.mods.map(id=>MODIFIERS[id].emoji+' '+MODIFIERS[id].name).join(' · ')}</div>`:''}
     ${state.redeploy?`<div class="boss-banner">🔁 REDEPLOYMENT — ordinary rewards, your place at the frontier is untouched</div>`:''}
     ${state.detour?`<div class="boss-banner">🧭 DETOUR — a tougher wave, a guaranteed reward if you take it</div>`:''}
+    ${state.undercroft?`<div class="boss-banner">☣ THE UNDERCROFT — a much tougher fight, but a permanent Corruption Ward awaits</div>`:''}
     <div class="terrain-banner">🗺 ${b.terrain.name}: ${b.terrain.desc}</div>
     <div class="gauge-wrap">
       <div class="gauge-label">LEGION GAUGE ${Math.floor(b.gauge)}% <span class="dim" style="font-size:13px;">— 🔧33 · 🛡66 · ⚡100</span></div>
@@ -8619,8 +8755,9 @@ function renderResult(){
       ${r.archiveFragment ? `<p style="color:var(--gold)">📜 Archive fragment recovered — <span style="cursor:pointer; text-decoration:underline;" onclick="goArchive()">read it</span>.</p>` : ''}
       ${(r.fieldPromotions && r.fieldPromotions.length) ? `<p class="dim" style="font-size:14px;">🎓 ${r.fieldPromotions.map(escapeHtml).join(' · ')}</p>` : ''}
       ${r.detourReward ? `<p style="color:var(--gold)">🧭 ${escapeHtml(r.detourReward)}</p>` : ''}
+      ${r.undercroftReward ? `<p style="color:var(--wind)">${escapeHtml(r.undercroftReward)}</p>` : ''}
       <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
-      <button class="btn primary" style="margin-top:10px;" onclick="${r.redeploy?'endRedeploy()':(r.detour?'endDetour()':'advanceStage()')}">${(r.redeploy||r.detour)?'Return to Hub →':(isDeep(state.stage)?'Descend further →':'Continue →')}</button>
+      <button class="btn primary" style="margin-top:10px;" onclick="${r.redeploy?'endRedeploy()':(r.detour?'endDetour()':(r.undercroft?'endUndercroft()':'advanceStage()'))}">${(r.redeploy||r.detour||r.undercroft)?'Return to Hub →':(isDeep(state.stage)?'Descend further →':'Continue →')}</button>
     </div>
     ${renderVictoryPortrait(r.portrait)}
     ${r.commanderLevel ? `<div class="panel" style="text-align:center;"><p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p></div>` : ''}`;
@@ -8637,7 +8774,7 @@ function renderResult(){
     <p class="dim">Adjust your formation, re-plate your beasts, and go again.</p>
     <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
     ${r.commanderLevel ? `<p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p>` : ''}
-    <button class="btn primary" style="margin-top:10px;" onclick="${r.redeploy?'endRedeploy()':(r.detour?'endDetour()':'retryStage()')}">${(r.redeploy||r.detour)?'Return to Hub →':`Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →`}</button>
+    <button class="btn primary" style="margin-top:10px;" onclick="${r.redeploy?'endRedeploy()':(r.detour?'endDetour()':(r.undercroft?'endUndercroft()':'retryStage()'))}">${(r.redeploy||r.detour||r.undercroft)?'Return to Hub →':`Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →`}</button>
   </div>`;
 }
 function finishTutorial(){
@@ -8649,7 +8786,13 @@ function finishTutorial(){
 }
 function advanceStage(){
   state.stage++;
-  if(isDeep(state.stage)) state.bestDepth = Math.max(state.bestDepth||0, deepDepth(state.stage));
+  if(isDeep(state.stage)){
+    const newDepth = deepDepth(state.stage);
+    // Field Companion: only a genuinely NEW record pays out, same ">"
+    // check Battle Replays already uses for the same reason.
+    if(newDepth > (state.bestDepth||0)) addCompanionXp(COMPANION_XP_PER_NEW_DEPTH);
+    state.bestDepth = Math.max(state.bestDepth||0, newDepth);
+  }
   state.battle=null; state.screen='hub';
   autosave();
   render();

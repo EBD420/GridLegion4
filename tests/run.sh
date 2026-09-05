@@ -91,6 +91,8 @@ run hub-tabs            dom-storage-server.js "$H/assert.js" "$S/53-hub-tabs.js"
 run replay-playback     dom-storage-server.js "$H/assert.js" "$S/54-replay-playback.js"
 run guild-projects      dom-storage-server.js "$H/assert.js" "$S/55-guild-projects.js"
 run black-market        dom-storage-server.js "$H/assert.js" "$S/56-black-market.js"
+run field-companion     dom-storage-server.js "$H/assert.js" "$S/57-field-companion.js"
+run the-undercroft      dom-storage-server.js "$H/assert.js" "$S/58-the-undercroft.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

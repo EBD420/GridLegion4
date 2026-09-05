@@ -282,6 +282,16 @@ would do. Same rotation-and-expiry clock as the Caravan, reused wholesale, just 
 rarer and more fleeting — a longer gap between appearances, a shorter window once she
 turns up, and lower odds of showing at all.
 
+**The Undercroft.** Corruption's second consequence — the in-battle glitch and
+defection risk is the immediate one, this is the one that catches up with you
+later. Once the roster's combined corruption crosses a threshold, a hidden stage
+opens at the Hub: a single, much tougher fight, claimable once. Winning it earns
+a permanent Corruption Ward that runs every beast in the legion cooler forever —
+so braving the depths is what actually buys the roster relief from the thing
+that opened the door in the first place. Built on the same one-time, anchored-
+stage plumbing as a Campaign Map Detour, just gated on corruption instead of on
+which stage you've cleared.
+
 **Trophy Case.** A pure-fluff Hub screen that lays out the legion's best moments side
 by side — deepest Reach, longest win streak, the toughest Ace and Vanguard ever felled,
 and a per-theory tally of Archive findings. Deepest Reach and the Archive already kept
@@ -298,6 +308,14 @@ of flavor on its Salvage Bay card. The same move War Journal made for a run as a
 whole, brought down to the level of one beast carried since Stage 1: nothing
 mechanical changes, and every counter lives on the monster itself, so fusing it away
 or a Rebirth resets its history exactly the way levels and parts already do.
+
+**Field Companion.** A small, non-combat mascot that rides along with the legion
+— no formation slot, no stats, nothing battle-critical. It levels up purely from
+ordinary play (a stage battle fought, a genuinely new Deep depth reached) and
+grants one small passive perk for the whole legion — a bonus salvage-drop
+chance, extra EXP, or extra favor, depending on which companion got rolled —
+that grows a little stronger with each level. Rolled once per legion and never
+re-rolled; like Trophy Case, a Rebirth never touches it.
 
 **Online Now.** A shared list of every commander active in the last few minutes —
 a plain poll, not a live feed, pinged by signing in, opening the screen, or
@@ -394,7 +412,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2793 assertions, no dependencies beyond `node`. The suites extract the script out of
+2875 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.
