@@ -31,6 +31,8 @@ const SRV = {
   warQueue: {},           // guildId -> {guild_id,queued_at}
   wars: {},               // id -> {id,guild_a,guild_b,guild_a_name,guild_a_tag,guild_b_name,guild_b_tag,score_a,score_b,starts_at,ends_at}
   warContrib: {},         // "warId|userId" -> {war_id,user_id,display_name,score}
+  projects: {},           // guildId -> {guild_id,total}
+  projectContrib: {},     // "guildId|userId" -> {guild_id,user_id,display_name,amount}
   online: true,
   requireConfirm: false,
   tokens: {},             // access -> {userId}
@@ -42,6 +44,7 @@ function srvReset(){
   SRV.users={}; SRV.rows={};
   SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={}; SRV.cvotes={}; SRV.presence={};
   SRV.replays={}; SRV.worldBoss={}; SRV.worldBossDamage={}; SRV.warQueue={}; SRV.wars={}; SRV.warContrib={};
+  SRV.projects={}; SRV.projectContrib={};
   SRV.online=true; SRV.requireConfirm=false; SRV.tokens={}; SRV.refreshes={};
   SRV.calls=[]; SRV.nextId=1; SRV.tableMissing=false; SRV.leakRows=false; SRV.rejectKey=false;
   SRV.preGuildHall=false;   // tables/functions installed, but step 4 (guild-hall upgrade) never run
@@ -50,6 +53,7 @@ function srvReset(){
   SRV.noReplaysTable=false;   // ...but step 7 (battle replays) never run
   SRV.noWorldBossTable=false; // ...but step 8 (world boss) never run
   SRV.noGuildWarsTable=false; // ...but step 9 (guild wars) never run
+  SRV.noGuildProjectsTable=false; // ...but step 10 (guild projects) never run
 }
 function lvlFor(xp){ return xp>=60000?6:xp>=30000?5:xp>=14000?4:xp>=6000?3:xp>=2000?2:1; }
 function mkSession(userId,email){
@@ -274,6 +278,19 @@ global.fetch = function(url, opts){
       SRV.warContrib[k].display_name=body.p_display||SRV.warContrib[k].display_name;
       return res(200,[{my_score: w.guild_a===g_id?w.score_a:w.score_b, opp_score: w.guild_a===g_id?w.score_b:w.score_a}]);
     }
+    if(fn==='contribute_guild_project'){
+      if(SRV.noGuildProjectsTable) return res(404,{message:"Could not find the function public.contribute_guild_project(p_amount, p_display) in the schema cache"});
+      const g_id = myGuild(); if(!g_id) return res(400,{message:'you are not in a guild'});
+      const amt = Math.min(Math.max(Number(body.p_amount)||0,0),14);   // server-side cap, mirrors the salvage bay's own max
+      if(amt<=0) return res(400,{message:'nothing to contribute'});
+      const proj = SRV.projects[g_id] = SRV.projects[g_id] || { guild_id:g_id, total:0 };
+      proj.total += amt;
+      const k = g_id+'|'+uid;
+      SRV.projectContrib[k]=SRV.projectContrib[k]||{guild_id:g_id,user_id:uid,display_name:body.p_display||'Commander',amount:0};
+      SRV.projectContrib[k].amount+=amt;
+      SRV.projectContrib[k].display_name=body.p_display||SRV.projectContrib[k].display_name;
+      return res(200, proj.total);
+    }
     return res(404,{message:'no function '+fn});
   }
 
@@ -414,6 +431,24 @@ global.fetch = function(url, opts){
       .map(w=>({id:w.id,guild_a:w.guild_a,guild_b:w.guild_b,guild_a_name:w.guild_a_name,guild_a_tag:w.guild_a_tag,
                 guild_b_name:w.guild_b_name,guild_b_tag:w.guild_b_tag,score_a:w.score_a,score_b:w.score_b,
                 starts_at:w.starts_at,ends_at:w.ends_at})));
+  }
+
+  if(path.indexOf('/rest/v1/guild_project_contributions')===0){
+    if(SRV.noGuildProjectsTable) return res(404,{message:"Could not find the table 'public.guild_project_contributions' in the schema cache"});
+    if(!who) return res(401,{message:'not signed in'});
+    const gm=path.match(/guild_id=eq\.([^&]+)/);
+    if(!gm) return res(200,[]);
+    return res(200, Object.values(SRV.projectContrib).filter(c=>c.guild_id===gm[1])
+      .sort((a,c)=>c.amount-a.amount).map(c=>({display_name:c.display_name,amount:c.amount})));
+  }
+  if(path.indexOf('/rest/v1/guild_projects')===0){
+    if(SRV.noGuildProjectsTable) return res(404,{message:"Could not find the table 'public.guild_projects' in the schema cache"});
+    // Bare self-test probe (?select=guild_id&limit=1, no filter): just checks the table exists.
+    const gm=path.match(/guild_id=eq\.([^&]+)/);
+    if(!gm) return res(200, Object.values(SRV.projects).slice(0,1).map(p=>({guild_id:p.guild_id})));
+    if(!who) return res(401,{message:'not signed in'});
+    const row = SRV.projects[gm[1]];
+    return res(200, row ? [{guild_id:row.guild_id, total:row.total}] : []);
   }
 
   if(path.indexOf('/rest/v1/legions')===0){

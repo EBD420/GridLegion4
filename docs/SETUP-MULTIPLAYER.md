@@ -913,6 +913,88 @@ moment anyone opens the Guild screen after the window passes, the same
 honest "poll, not real-time" trade-off Online Now already makes. Queuing
 again afterwards starts a fresh war.
 
+## Step 10 — guild projects
+
+**Needs the guild-hall upgrade (step 4).** A permanent, guild-wide resource
+sink, separate from guild levels and the weekly council vote above — members
+spend their own salvage parts into one running total that only ever grows.
+There is no "start" step like the raid boss or a war: the project is always
+running, there just isn't anything in it until someone contributes. Unlike
+everything else in this file, the amount contributed is a real cost to the
+player (parts they actually had, spent for good) rather than a battle result,
+so the function only ever adds — it never needs to touch anything the client
+could plausibly want back.
+
+```sql
+create table public.guild_projects (
+  guild_id uuid primary key references public.guilds(id) on delete cascade,
+  total    bigint not null default 0
+);
+
+create table public.guild_project_contributions (
+  guild_id     uuid not null references public.guilds(id) on delete cascade,
+  user_id      uuid not null references auth.users(id) on delete cascade,
+  display_name text not null,
+  amount       bigint not null default 0,
+  primary key (guild_id, user_id)
+);
+
+alter table public.guild_projects              enable row level security;
+alter table public.guild_project_contributions enable row level security;
+
+-- Reuses the my_guild_id() helper from step 1, same reasoning as every
+-- other guild-scoped policy in this file.
+create policy "a guild can see its own project"
+  on public.guild_projects for select to authenticated
+  using (guild_id = public.my_guild_id());
+
+create policy "a guild can see its own project contributions"
+  on public.guild_project_contributions for select to authenticated
+  using (guild_id = public.my_guild_id());
+
+grant select on public.guild_projects, public.guild_project_contributions to authenticated;
+
+-- The client has already removed the parts from its own bay before calling
+-- this — the amount is capped at 14 anyway (a bay can never hold more than
+-- that in one go), so there is nothing here for a tampered client to gain
+-- by over-reporting. Same atomic-update shape as contribute_raid.
+create or replace function public.contribute_guild_project(p_amount int, p_display text)
+returns bigint language plpgsql security definer set search_path = public as $$
+declare g_id uuid; amt int; new_total bigint;
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  select guild_id into g_id from guild_members where user_id = auth.uid();
+  if g_id is null then raise exception 'you are not in a guild'; end if;
+
+  amt := least(greatest(coalesce(p_amount,0), 0), 14);
+  if amt <= 0 then raise exception 'nothing to contribute'; end if;
+
+  insert into guild_projects (guild_id, total) values (g_id, amt)
+    on conflict (guild_id) do update set total = guild_projects.total + amt
+    returning total into new_total;
+
+  insert into guild_project_contributions (guild_id, user_id, display_name, amount)
+    values (g_id, auth.uid(), coalesce(nullif(p_display,''),'Commander'), amt)
+    on conflict (guild_id, user_id)
+    do update set amount = guild_project_contributions.amount + amt,
+                  display_name = excluded.display_name;
+
+  return new_total;
+end $$;
+```
+
+Then reload the schema cache the same way as before:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+The three project tiers (30 / 90 / 180 cumulative parts) and what each one
+unlocks live client-side in `GUILD_PROJECT_TIERS` — nothing server-side needs
+to know about them, since the server only ever tracks the running total.
+Crossing a threshold never resets it, and funding a large amount at once can
+cross more than one tier in a single contribution.
+
 ---
 
 ## How each feature behaves
@@ -967,6 +1049,15 @@ for more than a loss, but a loss still counts); whoever's total is higher when
 the window closes wins. No scheduled job closes it out — the game just checks
 the clock the next time anyone opens the Guild screen.
 
+**Guild projects** — a shared, permanent upgrade fund. Any member can donate
+their own salvage parts (1, 5, or their whole bay at once) from the Guild
+Projects panel; the parts are only actually spent once the server confirms
+the donation landed, so a dropped connection never costs anyone a part for
+nothing. Three tiers (30 / 90 / 180 cumulative parts) unlock in order —
+a bonus salvage-drop chance, a cosmetic guild crest, and a better caravan
+exchange rate exclusive to the guild — and once a tier is funded it stays
+unlocked forever, for every member, present or future.
+
 ## Cost
 
 All of this is well inside Supabase's free tier. The heaviest table is `ladder`,
@@ -974,4 +1065,5 @@ at one row per player — `presence` is the same shape and just as light. `repla
 only grows when a player explicitly shares something, so it stays smaller still.
 `world_boss`/`world_boss_damage` and the `guild_wars` family grow by one row per
 boss or per war, not per battle — attacking either only ever updates an existing
-row's counters.
+row's counters. `guild_projects` is one row per guild, ever — `guild_project_contributions`
+is one row per member per guild, same shape as the raid damage board.

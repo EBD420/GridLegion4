@@ -343,6 +343,15 @@ your guild's side instead of the campaign — a win worth more than a loss, but 
 still counts for something — and once the clock runs out, the higher score wins,
 visible to both sides with an honest draw if it's ever exactly tied.
 
+**Guild Projects.** A permanent, guild-wide resource sink separate from guild
+levels and the weekly council vote — any member can donate their own salvage
+parts into one running total that only ever grows. Three cumulative tiers
+unlock in order and stay unlocked forever: a bonus salvage-drop chance for
+the whole guild, a cosmetic crest flown at the top of the Guild Hall, and a
+better caravan exchange rate offered only to that guild. Donations are only
+ever spent once the server confirms they landed, so a dropped connection
+never costs anyone a part for nothing.
+
 **Hub.** With this many systems, the home screen is grouped into five tabs — Legion,
 Records, Campaign, Online, Settings — instead of one long wall of buttons. The
 banners above the tabs (story text, terrain, Intel, Doctrine, the Caravan, augment
@@ -350,9 +359,10 @@ picks, login streak) and the Deploy-to-Battle panel below them stay put regardle
 which tab is open; only the button grid switches.
 
 **Optional online.** Accounts and cloud saves, guilds with levels, perks and a weekly
-council vote, a shared raid boss and a server-wide World Boss, an asynchronous PvP
-ladder, timed guild-vs-guild Wars, a shareable Battle Replay feed, and a shared list
-of who's active right now. All of it is off until configured, and the single-player
+council vote, a permanent guild project fund, a shared raid boss and a server-wide
+World Boss, an asynchronous PvP ladder, timed guild-vs-guild Wars, a shareable
+Battle Replay feed, and a shared list of who's active right now. All of it is off
+until configured, and the single-player
 game never depends on it.
 
 ## Optional backend
@@ -374,7 +384,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2660 assertions, no dependencies beyond `node`. The suites extract the script out of
+2719 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

@@ -850,18 +850,24 @@ function activeBlessing(){ return (state.blessing && blessingUnlocked(state.bles
 const CARAVAN_MIN_GAP_MS = 10*60*1000;   // real minutes before the NEXT offer becomes eligible to roll
 const CARAVAN_WINDOW_MS  = 15*60*1000;   // real minutes an offer stays open before it quietly moves on
 const CARAVAN_SPAWN_CHANCE = 0.35;       // odds a roll actually produces an offer, once eligible
-const CARAVAN_OFFER_TYPES = ['parts_for_favor', 'favor_for_parts', 'recruit_for_salvage'];
+/* concord_trade is a member of the full whitelist below (so a saved offer of
+   this type survives revival), but it is only ever ROLLED for a guild that
+   has funded the Caravan Concord project — see caravanRollPool(). */
+const CARAVAN_OFFER_TYPES = ['parts_for_favor', 'favor_for_parts', 'recruit_for_salvage', 'concord_trade'];
 const CARAVAN_PARTS_COST = 2;           // parts_for_favor: parts spent
 const CARAVAN_FAVOR_REWARD = 15;        // parts_for_favor: favor gained, with the offer's own tribe
 const CARAVAN_FAVOR_COST = 20;          // favor_for_parts: favor spent, with the offer's own tribe
 const CARAVAN_PARTS_REWARD = 2;         // favor_for_parts: parts gained
 const CARAVAN_RECRUIT_PARTS_COST = 3;   // recruit_for_salvage: parts spent for a guaranteed recruit
+const CARAVAN_CONCORD_PARTS_COST = 2;   // concord_trade: parts spent — same cost as parts_for_favor...
+const CARAVAN_CONCORD_FAVOR_REWARD = 24;// ...but a noticeably better rate, courtesy of the guild project
 
 function caravanOfferText(o){
   if(!o) return '';
   const trib = TRIBES[o.tribe];
   if(o.type==='parts_for_favor')    return `${trib.emoji} The caravan is buying: ${CARAVAN_PARTS_COST} salvage parts for ${CARAVAN_FAVOR_REWARD} favor with the ${trib.name}.`;
   if(o.type==='favor_for_parts')    return `${trib.emoji} The caravan is selling: ${CARAVAN_PARTS_REWARD} salvage parts for ${CARAVAN_FAVOR_COST} of your favor with the ${trib.name}.`;
+  if(o.type==='concord_trade')      return `${trib.emoji} Caravan Concord: trading at guild rates — ${CARAVAN_CONCORD_PARTS_COST} salvage parts for ${CARAVAN_CONCORD_FAVOR_REWARD} favor with the ${trib.name}.`;
   return `${trib.emoji} The caravan has a recruit to place: a guaranteed ${trib.name}-aligned monster for ${CARAVAN_RECRUIT_PARTS_COST} salvage parts.`;
 }
 function caravanCanAfford(o){
@@ -869,11 +875,22 @@ function caravanCanAfford(o){
   if(o.type==='parts_for_favor')    return state.parts.length>=CARAVAN_PARTS_COST;
   if(o.type==='favor_for_parts')    return favorOf(o.tribe)>=CARAVAN_FAVOR_COST && state.parts.length<14;
   if(o.type==='recruit_for_salvage')return state.parts.length>=CARAVAN_RECRUIT_PARTS_COST && state.roster.length<rosterCap();
+  if(o.type==='concord_trade')      return hasProject('concord') && state.parts.length>=CARAVAN_CONCORD_PARTS_COST;
   return false;
 }
+/* The pool actually eligible to roll — every ordinary type, plus
+   concord_trade only once this player's guild has funded that project.
+   A previously-rolled concord_trade offer still honours its own save/accept
+   logic even if the project gate later reads false (e.g. mid-load, before
+   guildProjectFetch resolves), same "stale until refreshed" trust model as
+   every other hasPerk()/hasProject() read in the game. */
+function caravanRollPool(){
+  return hasProject('concord') ? CARAVAN_OFFER_TYPES : CARAVAN_OFFER_TYPES.filter(t=>t!=='concord_trade');
+}
 function rollCaravanOffer(nowMs){
+  const pool = caravanRollPool();
   state.caravan = {
-    type: CARAVAN_OFFER_TYPES[Math.floor(Math.random()*CARAVAN_OFFER_TYPES.length)],
+    type: pool[Math.floor(Math.random()*pool.length)],
     tribe: TRIBE_IDS[Math.floor(Math.random()*TRIBE_IDS.length)],
     expiresAt: nowMs + CARAVAN_WINDOW_MS,
   };
@@ -906,6 +923,9 @@ function acceptCaravanTrade(){
     const owned = state.roster.map(m=>m.speciesId).filter(id=>SPECIES[id] && !SPECIES[id].champion);
     const id = (owned.length && Math.random()<0.55) ? owned[Math.floor(Math.random()*owned.length)] : WILD_IDS[Math.floor(Math.random()*WILD_IDS.length)];
     state.roster.push(newMonster(id,1,1));
+  } else if(o.type==='concord_trade'){
+    state.parts.splice(0, CARAVAN_CONCORD_PARTS_COST);
+    addFavor(o.tribe, CARAVAN_CONCORD_FAVOR_REWARD);
   }
   state.caravan = null;
   state.caravanNextEligible = Date.now() + CARAVAN_MIN_GAP_MS;
@@ -1479,7 +1499,7 @@ function cloudSelfTest(){
                                   return null;
                                 })
                                 .catch(()=>null)
-                                // 8. guild wars (step 9) — the most recent migration.
+                                // 8. guild wars (step 9).
                                 .then(()=>{
                                   return cloudFetch('/rest/v1/guild_wars?select=id&limit=1', { method:'GET' }, true)
                                     .then(r8=>{
@@ -1489,9 +1509,23 @@ function cloudSelfTest(){
                                       } else {
                                         add(true, 'Guild Wars tables are present.');
                                       }
-                                      return { lines: out, fatal:false };
+                                      return null;
                                     })
-                                    .catch(()=>({ lines: out, fatal:false }));
+                                    .catch(()=>null)
+                                    // 9. guild projects (step 10) — the most recent migration.
+                                    .then(()=>{
+                                      return cloudFetch('/rest/v1/guild_projects?select=guild_id&limit=1', { method:'GET' }, true)
+                                        .then(r9=>{
+                                          const m9 = (r9.body && (r9.body.message||r9.body.hint)) || '';
+                                          if(r9.status===404 || /could not find the table|does not exist/i.test(String(m9))){
+                                            add(false, 'The Guild Projects tables are missing — run step 10 of SETUP-MULTIPLAYER.md to enable them.');
+                                          } else {
+                                            add(true, 'Guild Projects tables are present.');
+                                          }
+                                          return { lines: out, fatal:false };
+                                        })
+                                        .catch(()=>({ lines: out, fatal:false }));
+                                    });
                                 });
                             });
                         });
@@ -1512,7 +1546,8 @@ const social = { guild:null, members:[], raid:null, board:[], ladder:[], rank:nu
                  council:[], councilError:'', status:'', guildError:'', busy:false, lastDuel:null,
                  online:[], onlineError:'', replays:[], replaysError:'', replayStatus:'', replayBusy:false,
                  worldBoss:null, worldBossBoard:[], worldBossError:'', worldBossStatus:'', worldBossBusy:false,
-                 guildWar:null, guildWarError:'', guildWarStatus:'', guildWarBusy:false };
+                 guildWar:null, guildWarError:'', guildWarStatus:'', guildWarBusy:false,
+                 project:null, projectBoard:[], projectError:'' };
 
 /* ---- guild progression ----
    Thresholds are cumulative XP. Perks are read from the server-held level and
@@ -1541,6 +1576,46 @@ function hasPerk(key){
   for(let l=2; l<=lvl; l++){ if(GUILD_PERKS[l] && GUILD_PERKS[l].key===key) return true; }
   return false;
 }
+
+/* ---- guild projects ----
+   A second, separate progression track from the level/XP ladder above and
+   from the weekly council vote — nothing here is passive and nothing here
+   resets. Members spend their OWN salvage parts (freeing bay slots the same
+   as any other spend) into one running guild-wide total that only ever
+   grows; every threshold the total crosses unlocks its effect permanently,
+   for every member, forever. Cumulative thresholds, same shape as GUILD_XP,
+   so funding a huge amount in one go can cross more than one tier at once.
+   See Step 10 of SETUP-MULTIPLAYER.md. */
+const GUILD_PROJECT_CONTRIB_CAP = 14;   // a salvage bay can never hold more than this in one go
+const GUILD_PROJECT_TIERS = [
+  { threshold:30,  key:'vault',   emoji:'🗃️', name:'Salvage Vault',
+    desc:'+8% chance of a bonus salvage drop from every victory, for the whole guild.' },
+  { threshold:90,  key:'crest',   emoji:'🛡️', name:'Guild Crest',
+    desc:'A crest of your own, flown at the top of the Guild Hall for every member.' },
+  { threshold:180, key:'concord', emoji:'🤝', name:'Caravan Concord',
+    desc:'Unlocks a better caravan exchange, offered only to this guild.' },
+];
+function guildProjectTotal(){ return (social.project && isFinite(Number(social.project.total))) ? Math.max(0, Number(social.project.total)) : 0; }
+function guildProjectTier(){
+  const total = guildProjectTotal();
+  let n = 0;
+  for(const t of GUILD_PROJECT_TIERS){ if(total >= t.threshold) n++; else break; }
+  return n;
+}
+function hasProject(key){
+  const n = guildProjectTier();
+  for(let i=0;i<n;i++){ if(GUILD_PROJECT_TIERS[i].key===key) return true; }
+  return false;
+}
+function nextGuildProjectTier(){ return GUILD_PROJECT_TIERS[guildProjectTier()] || null; }   // null once every tier is funded
+function guildProjectFloor(){ const n = guildProjectTier(); return n>0 ? GUILD_PROJECT_TIERS[n-1].threshold : 0; }
+function guildProjectPct(){
+  const next = nextGuildProjectTier();
+  if(!next) return 100;
+  const floor = guildProjectFloor();
+  return Math.max(0, Math.min(100, Math.round(((guildProjectTotal()-floor) / (next.threshold-floor)) * 100)));
+}
+
 function myMembership(){
   if(!cloud.session) return null;
   return social.members.find(m=>m.user_id===cloud.session.user.id) || null;
@@ -1634,7 +1709,8 @@ function guildKick(userId){
   return rpc('kick_member', { p_user: userId }).then(r=>r.ok?guildFetch().then(()=>({ok:true})):r);
 }
 function guildLeave(){
-  return rpc('leave_guild', {}).then(r=>{ social.guild=null; social.members=[]; social.raid=null; social.board=[]; social.council=[]; social.councilError=''; return r; });
+  return rpc('leave_guild', {}).then(r=>{ social.guild=null; social.members=[]; social.raid=null; social.board=[]; social.council=[]; social.councilError='';
+    social.project=null; social.projectBoard=[]; social.projectError=''; return r; });
 }
 
 /* ---- guild council ----
@@ -1831,6 +1907,29 @@ function guildWarStart(){
 function guildWarContribute(score){
   return rpc('contribute_guild_war', { p_score: Math.max(0, Math.round(score)), p_display: legionBanner() }, GUILD_WAR_MISSING)
     .then(r=>r.ok?guildWarFetch().then(()=>({ok:true, body:r.body})):r);
+}
+
+/* ---- guild projects (network) ----
+   No "start" step, unlike raid/world boss/guild war — the project is always
+   running, there is just nothing in it yet. contribute spends nothing
+   server-side; the client only removes the parts from its own bay once the
+   server confirms the amount landed, so a network failure never destroys a
+   part for nothing. See Step 10 of SETUP-MULTIPLAYER.md. */
+const GUILD_PROJECT_MISSING = 'Guild Projects are not installed on your project yet — run Step 10 of SETUP-MULTIPLAYER.md, then reload the schema.';
+function guildProjectFetch(){
+  if(!social.guild) return Promise.resolve(null);
+  return restGetDiag('guild_projects?select=guild_id,total&guild_id=eq.'+social.guild.id, GUILD_PROJECT_MISSING)
+    .then(res=>{
+      if(!res.ok){ social.projectError=res.error; social.project=null; social.projectBoard=[]; return null; }
+      social.projectError='';
+      social.project = res.rows.length ? res.rows[0] : { guild_id: social.guild.id, total: 0 };
+      return restGet('guild_project_contributions?select=display_name,amount&guild_id=eq.'+social.guild.id+'&order=amount.desc&limit=20')
+        .then(rows=>{ social.projectBoard = rows||[]; return social.project; });
+    });
+}
+function guildProjectContribute(amount){
+  return rpc('contribute_guild_project', { p_amount: Math.max(0, Math.min(GUILD_PROJECT_CONTRIB_CAP, Math.round(amount))), p_display: legionBanner() }, GUILD_PROJECT_MISSING)
+    .then(r=>r.ok?guildProjectFetch().then(()=>({ok:true, body:r.body})):r);
 }
 
 /* ---- ladder ---- */
@@ -3948,6 +4047,7 @@ function goGuild(){
     .then(g=>{ if(g) return raidFetch(); return null; })
     .then(()=>{ if(social.guild) return councilFetch(); return null; })
     .then(()=>{ if(social.guild) return guildWarFetch(); return null; })
+    .then(()=>{ if(social.guild) return guildProjectFetch(); return null; })
     .then(()=>render());
 }
 function goLadder(){
@@ -4017,6 +4117,16 @@ function renderGuild(){
   const gwBoard = (social.guildWarBoard||[]).map((row,i)=>
     `<div>${i+1}. ${escapeHtml(row.display_name)} — ${Number(row.score).toLocaleString()}</div>`).join('') || '<div class="dim">No score logged yet.</div>';
 
+  const projErrMsg = social.projectError ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.projectError)}</p>` : '';
+  const projTotal = guildProjectTotal();
+  const projTierIdx = guildProjectTier();
+  const projNext = nextGuildProjectTier();
+  const projTierRows = GUILD_PROJECT_TIERS.map((t,i)=>{
+    const have = i < projTierIdx;
+    return `<div style="color:${have?'var(--gold)':'var(--dim)'}; font-size:16px;">
+      ${have?'✔':'○'} <b>${t.emoji} ${escapeHtml(t.name)}</b> (${t.threshold.toLocaleString()}) — ${escapeHtml(t.desc)}</div>`;
+  }).join('');
+
   const lvl = guildLevel(), next = guildXpNext();
   const perkRows = Object.keys(GUILD_PERKS).map(l=>{
     const P = GUILD_PERKS[l], have = lvl >= Number(l);
@@ -4066,7 +4176,8 @@ function renderGuild(){
 
   return `
   <div class="panel">
-    <h2 class="section">${escapeHtml(social.guild.name)} <span class="dim">[${escapeHtml(social.guild.tag)}]</span></h2>
+    <h2 class="section">${hasProject('crest')?'🛡️ ':''}${escapeHtml(social.guild.name)} <span class="dim">[${escapeHtml(social.guild.tag)}]</span></h2>
+    ${hasProject('crest') ? '<p class="dim" style="color:var(--gold)">🛡️ This guild has earned its own crest.</p>' : ''}
     ${errMsg}
     <div class="row" style="align-items:baseline; gap:14px;">
       <div style="font-size:26px; color:var(--gold);">Level ${lvl||1}</div>
@@ -4140,6 +4251,27 @@ function renderGuild(){
           : `<p class="dim">No war is active. Queue up and the game matches you against the next guild that does the same.</p>
              <button class="btn primary" ${social.guildWarBusy?'disabled':''} onclick="doGuildWarStart()">Declare war</button>`)}
   </div>
+  <div class="panel">
+    <h2 class="section">GUILD PROJECTS</h2>
+    <p class="dim">A permanent, shared upgrade fund — every member spends their own salvage parts into one running total. Nothing here ever resets, and each threshold crossed benefits the whole guild forever.</p>
+    ${projErrMsg}
+    <div style="margin-top:6px;">${projTierRows}</div>
+    ${projNext ? `
+      <div class="gauge-bg" style="margin-top:10px;"><div class="gauge-fill" style="width:${guildProjectPct()}%"></div></div>
+      <div class="dim" style="font-size:15px;">${projTotal.toLocaleString()} / ${projNext.threshold.toLocaleString()} parts toward ${projNext.emoji} ${escapeHtml(projNext.name)}</div>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn small" ${social.busy||!state.parts.length?'disabled':''} onclick="doGuildProjectContribute(1)">Donate 1</button>
+        <button class="btn small" ${social.busy||state.parts.length<5?'disabled':''} onclick="doGuildProjectContribute(5)">Donate 5</button>
+        <button class="btn small" ${social.busy||!state.parts.length?'disabled':''} onclick="doGuildProjectContribute('max')">Donate all</button>
+      </div>
+      <p class="dim" style="font-size:14px; margin-top:6px;">You currently hold ${state.parts.length} salvage part${state.parts.length===1?'':'s'}.</p>`
+      : `<p style="color:var(--gold)">Every project is funded. The guild has nothing left to build toward — thank whoever tipped it over the line.</p>`}
+    ${(social.projectBoard&&social.projectBoard.length) ? `
+      <div style="margin-top:12px;">
+        <div class="dim">Contributor board</div>
+        <div class="testbox">${social.projectBoard.map((row,i)=>`<div>${i+1}. ${escapeHtml(row.display_name)} — ${Number(row.amount).toLocaleString()}</div>`).join('')}</div>
+      </div>` : ''}
+  </div>
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
 
@@ -4170,7 +4302,7 @@ function timeUntil(iso){
 }
 function doGuildRefresh(){
   social.busy=true; render();
-  guildSync().then(()=>guildFetch()).then(()=>raidFetch()).then(()=>councilFetch()).then(()=>{ social.busy=false; render(); });
+  guildSync().then(()=>guildFetch()).then(()=>raidFetch()).then(()=>councilFetch()).then(()=>guildProjectFetch()).then(()=>{ social.busy=false; render(); });
 }
 function doCouncilVote(option){
   social.busy=true; render();
@@ -4228,6 +4360,23 @@ function startGuildWarRun(){
   beginBattle();
 }
 function endGuildWarRun(){ state.guildWarRun=false; state.battle=null; state.screen='guild'; render(); guildWarFetch().then(()=>render()); }
+
+/* n is a real count, or the string 'max' to donate everything the bay holds
+   (still capped at GUILD_PROJECT_CONTRIB_CAP). Spends the parts only once
+   the server confirms the contribution landed — see guildProjectContribute. */
+function doGuildProjectContribute(n){
+  if(!social.guild || social.busy) return;
+  const avail = state.parts.length;
+  if(avail<=0){ social.status='You have no salvage parts to contribute.'; render(); return; }
+  const amount = Math.max(1, Math.min(avail, GUILD_PROJECT_CONTRIB_CAP, n==='max' ? avail : (Math.floor(Number(n))||0)));
+  social.busy=true; render();
+  guildProjectContribute(amount).then(r=>{
+    social.busy=false;
+    if(r.ok) state.parts.splice(0, amount);
+    social.status = r.ok ? `Contributed ${amount} part${amount===1?'':'s'} to the guild project.` : ('Could not contribute: '+r.error);
+    render();
+  });
+}
 
 /* ============ ONLINE NOW ============ */
 function renderOnline(){
@@ -7824,7 +7973,7 @@ function endBattle(result){
     const pulls = (isEliteStage(state.stage) || isBossWin) ? 2 : 1;
     for(let d=0; d<pulls; d++){
       if(state.parts.length>=14) break;
-      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0) + WIN_STREAK_SALVAGE_PER*winStreakLevel())) break;
+      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0) + WIN_STREAK_SALVAGE_PER*winStreakLevel() + (hasProject('vault')?0.08:0))) break;
       const keys = b.enemyUnits.map(u=>u.speciesKey).filter(Boolean);
       if(!keys.length) break;
       const drop = { uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] };
