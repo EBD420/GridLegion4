@@ -24,7 +24,7 @@ global.atob = (b)=>Buffer.from(b,'base64').toString('binary');
 const SRV = {
   users: {},              // email -> {id,password}
   rows: {},               // userId -> {slot: {data, updated_at}}
-  guilds: {}, gmembers: {}, bosses: {}, rdamage: {}, ladder: {}, cvotes: {},
+  guilds: {}, gmembers: {}, bosses: {}, rdamage: {}, ladder: {}, cvotes: {}, presence: {},
   online: true,
   requireConfirm: false,
   tokens: {},             // access -> {userId}
@@ -34,11 +34,12 @@ const SRV = {
 };
 function srvReset(){
   SRV.users={}; SRV.rows={};
-  SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={}; SRV.cvotes={};
+  SRV.guilds={}; SRV.gmembers={}; SRV.bosses={}; SRV.rdamage={}; SRV.ladder={}; SRV.cvotes={}; SRV.presence={};
   SRV.online=true; SRV.requireConfirm=false; SRV.tokens={}; SRV.refreshes={};
   SRV.calls=[]; SRV.nextId=1; SRV.tableMissing=false; SRV.leakRows=false; SRV.rejectKey=false;
   SRV.preGuildHall=false;   // tables/functions installed, but step 4 (guild-hall upgrade) never run
   SRV.noCouncilTable=false; // steps 1/2/4 done, but step 5 (guild council) never run
+  SRV.noPresenceTable=false; // steps 1/2/4/5 done, but step 6 (online now) never run
 }
 function lvlFor(xp){ return xp>=60000?6:xp>=30000?5:xp>=14000?4:xp>=6000?3:xp>=2000?2:1; }
 function mkSession(userId,email){
@@ -197,6 +198,11 @@ global.fetch = function(url, opts){
       SRV.ladder[body.p_opponent].rating=Math.max(0,Math.min(4000,SRV.ladder[body.p_opponent].rating-d));
       return res(200,SRV.ladder[uid].rating);
     }
+    if(fn==='heartbeat'){
+      if(SRV.noPresenceTable) return res(404,{message:"Could not find the function public.heartbeat(p_display) in the schema cache"});
+      SRV.presence[uid]={user_id:uid, username:body.p_display||'Commander', last_seen:new Date().toISOString()};
+      return res(200,null);
+    }
     return res(404,{message:'no function '+fn});
   }
 
@@ -262,6 +268,17 @@ global.fetch = function(url, opts){
     if(!who) return res(401,{message:'not signed in'});
     return res(200, Object.values(SRV.ladder).sort((a,c)=>c.rating-a.rating)
       .map(l=>({user_id:l.user_id,display_name:l.display_name,rating:l.rating,power:l.power})));
+  }
+  if(path.indexOf('/rest/v1/presence')===0){
+    if(SRV.noPresenceTable) return res(404,{message:"Could not find the table 'public.presence' in the schema cache"});
+    // Bare self-test probe (?select=username&limit=1, no last_seen filter): just checks the table exists.
+    const gte=path.match(/last_seen=gte\.([^&]+)/);
+    if(!gte) return res(200, Object.values(SRV.presence).slice(0,1).map(p=>({username:p.username})));
+    if(!who) return res(401,{message:'not signed in'});
+    const cutoff=decodeURIComponent(gte[1]);
+    return res(200, Object.values(SRV.presence).filter(p=>p.last_seen>=cutoff)
+      .sort((a,c)=>c.last_seen.localeCompare(a.last_seen))
+      .map(p=>({user_id:p.user_id,username:p.username,last_seen:p.last_seen})));
   }
 
   if(path.indexOf('/rest/v1/legions')===0){

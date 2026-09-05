@@ -581,6 +581,57 @@ leading option, and the stat buff are all computed in the game itself.
 
 ---
 
+## Step 6 — online now
+
+**Optional, and independent of every step above** — this one isn't guild-scoped
+at all, so it works for a player who has never joined a guild or published a
+ladder formation. Adds a single small table: a heartbeat row per player, and a
+read of whoever's heartbeat landed in the last few minutes. Safe to run more
+than once.
+
+```sql
+create table public.presence (
+  user_id   uuid primary key references auth.users(id) on delete cascade,
+  username  text not null,
+  last_seen timestamptz not null default now()
+);
+
+alter table public.presence enable row level security;
+
+-- Same shape as the ladder policy above: readable by anyone signed in,
+-- not just players who share a guild.
+create policy "presence is public to signed-in players"
+  on public.presence for select to authenticated using (true);
+
+grant select on public.presence to authenticated;
+
+-- Called on sign-in, on opening the Online Now screen, and once per stage
+-- battle — an upsert, so a player's row just keeps getting a newer
+-- last_seen rather than growing a new one.
+create or replace function public.heartbeat(p_display text)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  insert into presence (user_id, username, last_seen)
+    values (auth.uid(), coalesce(nullif(p_display,''),'Commander'), now())
+    on conflict (user_id) do update
+      set username = excluded.username, last_seen = now();
+end $$;
+```
+
+Then reload the schema cache the same way as before:
+
+```sql
+notify pgrst, 'reload schema';
+```
+
+The game only ever keeps heartbeats from roughly the last five minutes, read
+fresh each time the Online Now screen opens — there is no websocket and no
+live count, the same honest "poll, not real-time" trade-off the rest of this
+document already makes.
+
+---
+
 ## How each feature behaves
 
 **Daily orders** — three objectives drawn from a date seed, so every player on a
@@ -607,7 +658,14 @@ favours Offensive. Voting again the same week changes your vote rather than addi
 a second one, and the buff is only ever a read-and-tally of everyone's votes — the
 same trust model as the raid damage board.
 
+**Online now** — every signed-in player, guild or no guild, shows up on one shared
+list for a few minutes after any heartbeat: signing in, opening the screen, or
+finishing a stage battle. A brand-new account also gets a generated username the
+moment it's created (see `generateUsername()` in the game), so it shows up here —
+and on the guild roster, the raid board and the ladder, all four already share the
+one display name — as something more distinctive than the default "Legion".
+
 ## Cost
 
 All of this is well inside Supabase's free tier. The heaviest table is `ladder`,
-at one row per player.
+at one row per player — `presence` is the same shape and just as light.

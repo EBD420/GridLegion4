@@ -56,7 +56,7 @@ ok('a hard fight opens the Loadout Gambit screen instead of deploying immediatel
 ok('three choices were rolled as a side effect', state.gambit && state.gambit.choices.length===3);
 
 startGame();
-setupFight(sixMonsters(), 3);   // not a hard fight
+setupFight(sixMonsters(), 2);   // not a hard fight, and not a Draft Augment checkpoint either (see DRAFT_AUGMENT_STAGES)
 goGambitOrBattle();
 ok('an ordinary fight deploys straight to battle, no gambit screen at all', state.screen==='battle' && !!state.battle && !state.gambit);
 

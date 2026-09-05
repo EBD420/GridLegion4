@@ -62,7 +62,7 @@ ok('its two Ballast Drones are fielded', gens2.length===2 && gens2.every(g=>g.na
 
 console.log('\n[74] the codex bestiary lists warlords once encountered, and counts them');
 startGame();
-ok('the total boss count includes all three warlords', codexTotals().bosses === Object.keys(BOSSES).length + 1 + Object.keys(WARLORDS).length,
+ok('the total boss count includes all three warlords', codexTotals().bosses === Object.keys(BOSSES).length + 2 + Object.keys(WARLORDS).length,
    codexTotals().bosses);
 let bestiary = renderCodex();
 ok('an unmet warlord shows as unknown', bestiary.indexOf('Warlord Ashclaw')<0);

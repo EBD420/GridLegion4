@@ -13,7 +13,7 @@ function fillCodexCategory(cat){
   if(cat==='species') Object.keys(SPECIES).forEach(k=>codexSee('species',k));
   else if(cat==='enemies') ENEMY_IDS.forEach(k=>codexSee('enemies',k));
   else if(cat==='hybrids') Object.keys(HYBRID_SPECIES).forEach(k=>codexSee('hybrids',k));
-  else if(cat==='bosses') Object.keys(BOSSES).map(k=>BOSSES[k]).concat([DEEP_BOSS]).concat(Object.keys(WARLORDS).map(k=>WARLORDS[k])).forEach(bd=>codexSee('bosses',bd.name));
+  else if(cat==='bosses') Object.keys(BOSSES).map(k=>BOSSES[k]).concat([DEEP_BOSS, DEEP_SPLIT_BOSS]).concat(Object.keys(WARLORDS).map(k=>WARLORDS[k])).forEach(bd=>codexSee('bosses',bd.name));
   else if(cat==='terrains') Object.keys(TERRAINS).forEach(k=>codexSee('terrains',k));
   else if(cat==='parts') Object.keys(PARTS).forEach(k=>codexSee('parts',k));
   else if(cat==='traits') TRAIT_IDS.forEach(k=>codexSee('traits',k));

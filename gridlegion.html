@@ -269,6 +269,7 @@
   .terrain-banner{ font-size:15px; color:var(--wind); border:1px dashed var(--border); padding:6px 8px; margin-bottom:10px; }
   .intel-banner{ font-size:16px; color:var(--rust); border:1px dashed var(--rust); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(226,136,74,0.08); }
   .doctrine-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.08); }
+  .caravan-banner{ font-size:16px; color:var(--gold); border:1px dashed var(--gold); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,178,56,0.08); }
   .threat-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .gauge-wrap{ margin-bottom:12px; }
   .gauge-label{ font-size:14px; color:var(--gold); margin-bottom:3px; }
@@ -529,6 +530,33 @@ function partInfo(key){
   return base;
 }
 
+/* ---- Set Bonuses: 2 or 3 equipped parts sharing a family — the same base
+   chassis a part was salvaged from, so a raw cinderjaw, a forged one, an
+   Ace-marked one and a Vanguard trophy all count as "the cinderjaw family"
+   together (see baseKeyOf) — push that chassis's own stat a little further
+   on top of what each part already grants individually. No new part data:
+   this only ever counts what's already equipped and reads PARTS[fam].stat
+   for which stat to add to, so a family's set bonus always reinforces the
+   same stat its own parts already lean into. ---- */
+const SET_BONUS_2PC = 0.06;   // 2 parts of the same family
+const SET_BONUS_3PC = 0.12;   // 3 or more — not additive with the 2pc figure, this replaces it
+function activeSetBonuses(parts){
+  const counts = {};
+  (parts||[]).forEach(k=>{
+    const p = partInfo(k); if(!p) return;
+    const fam = baseKeyOf(k);
+    counts[fam] = (counts[fam]||0) + 1;
+  });
+  const out = [];
+  Object.keys(counts).forEach(fam=>{
+    const n = counts[fam];
+    if(n<2) return;
+    const base = PARTS[fam]; if(!base) return;
+    out.push({ family: fam, name: base.name, stat: base.stat, count: n, pct: n>=3 ? SET_BONUS_3PC : SET_BONUS_2PC });
+  });
+  return out;
+}
+
 /* ---- Cross-species fusion: every element pair has a named hybrid ---- */
 const HYBRIDS = {
   'fire+water':   { name:'Steamling',    emoji:'♨️', skill:'Scald Burst' },
@@ -607,6 +635,51 @@ const STAGE_STORY = [
   "The enemy brings forward a command unit, shielded by its strongest guard.",
   "This is the gate to the Rustbound's forward base. Break it, and Texel breathes again.",
 ];
+
+/* ---- Campaign Map: doesn't touch battle math or the surface campaign's
+   normal stage-by-stage flow at all — it's a presentation layer over it
+   (see renderCampaignMap below), plus a small set of optional detours. A
+   detour forks off an ordinary (non-boss) stage already cleared: fight a
+   tougher version of that same wave — same species pool, same terrain,
+   just meaner (see DETOUR_STAT_MULT in buildEnemyUnits) — for a specific,
+   guaranteed reward the ordinary drop roll never hands out. One-time per
+   detour, permanent once claimed: like state.cleared and the Archive, a
+   Rebirth never touches state.campaignDetours. Deliberately small (three
+   detours, anchored well short of the Deep) — this is a light detour off
+   the main line, not a second progression system. */
+const DETOUR_STAT_MULT = 1.3;
+const CAMPAIGN_DETOURS = [
+  { id:'stripped_grove', afterStage:2, name:'The Stripped Grove',
+    desc:"The scavenger unit that stripped this grove bare never moved on — a heavier patrol than the wave that passed through, still picking the wreckage clean.",
+    rewardDesc:'+18 Nature favor', reward:{ type:'favor', element:'nature', amount:18 } },
+  { id:'ashen_garrison', afterStage:4, name:'The Ashen Garrison',
+    desc:"Intelligence undersold it — a reinforced garrison holds the crossing, not just the patrol that met you on the road.",
+    rewardDesc:'Guaranteed Napalm Jets', reward:{ type:'part', key:'cinderjaw' } },
+  { id:'fragile_line', afterStage:6, name:'The Fragile Line',
+    desc:"Deep radar isn't the only thing moving under the Thornwood — a heavier Rustbound patrol has dug in on ground the tribes can't afford to lose. A harder fight than the wave that already passed through.",
+    rewardDesc:'A field report for the War Journal',
+    reward:{ type:'lore', text:"A runner's account, copied into the ledger word for word: \"Tell them it's working. Tell them it's slow, but tell them it's working. We held the line today because someone held it yesterday, and because we will hold it tomorrow. That's the whole report. That's the whole war.\"" } },
+];
+function claimedDetour(id){ return !!(state.campaignDetours && state.campaignDetours[id]); }
+function detourAvailable(det){ return !!state.cleared[det.afterStage] && !claimedDetour(det.id); }
+/* Called once from endBattle()'s shared tail, win only. Returns a short
+   display string on success, or null if the reward genuinely could not be
+   granted right now (a full salvage bay) — in that case the detour is left
+   unclaimed so the player can come back and actually collect it. */
+function grantDetourReward(det){
+  const r = det.reward;
+  if(r.type==='favor'){ addFavor(r.element, r.amount); return `${TRIBES[r.element].emoji} +${r.amount} ${TRIBES[r.element].name} favor`; }
+  if(r.type==='part'){
+    if(state.parts.length>=14) return null;
+    state.parts.push({ uid: uid(), key:r.key });
+    return `${PARTS[r.key].emoji} ${PARTS[r.key].name} recovered`;
+  }
+  if(r.type==='lore'){
+    journalAdd({ id:uid(), stage:state.stage, deep:false, win:true, boss:null, text:r.text, at:Date.now(), portrait:null });
+    return '📜 A field report, logged in the War Journal';
+  }
+  return null;
+}
 
 /* ---- Daily scavenger missions. Purely local: date-seeded, so every
        player on a given day gets the same three, with no server needed. ---- */
@@ -758,6 +831,87 @@ function addFavor(e, n){
 function championUnlocked(e){ return favorOf(e) >= FAVOR_CHAMPION; }
 function blessingUnlocked(e){ return favorOf(e) >= FAVOR_BLESSING; }
 function activeBlessing(){ return (state.blessing && blessingUnlocked(state.blessing)) ? state.blessing : null; }
+
+/* ============ SCAVENGER CARAVAN ============
+   A traveling trader who shows up at the Hub on her own clock, offers a
+   single short-lived trade, and moves on if it isn't taken — "the world
+   keeps going even when you're not deploying," per the pitch. That means
+   real elapsed time, not the calendar day Orders resets on, so this is
+   built on the same idea as The Camp's away-time bonus (see
+   campAwayFrac): a pure function of an injectable nowMs, checked — never
+   ticked on a timer — at the same two choke points The Camp already
+   uses: right after a save loads (continueSlot) and in endBattle()'s
+   shared win/loss tail, the same spot state.streak updates. A duel,
+   raid, trial or the tutorial never reach that tail, so the caravan
+   can't spawn or expire mid-detour into one of those. No decline button
+   on purpose — an offer just sits on the Hub, tradeable or not, until
+   it's taken or its own clock runs out.
+   ============================================= */
+const CARAVAN_MIN_GAP_MS = 10*60*1000;   // real minutes before the NEXT offer becomes eligible to roll
+const CARAVAN_WINDOW_MS  = 15*60*1000;   // real minutes an offer stays open before it quietly moves on
+const CARAVAN_SPAWN_CHANCE = 0.35;       // odds a roll actually produces an offer, once eligible
+const CARAVAN_OFFER_TYPES = ['parts_for_favor', 'favor_for_parts', 'recruit_for_salvage'];
+const CARAVAN_PARTS_COST = 2;           // parts_for_favor: parts spent
+const CARAVAN_FAVOR_REWARD = 15;        // parts_for_favor: favor gained, with the offer's own tribe
+const CARAVAN_FAVOR_COST = 20;          // favor_for_parts: favor spent, with the offer's own tribe
+const CARAVAN_PARTS_REWARD = 2;         // favor_for_parts: parts gained
+const CARAVAN_RECRUIT_PARTS_COST = 3;   // recruit_for_salvage: parts spent for a guaranteed recruit
+
+function caravanOfferText(o){
+  if(!o) return '';
+  const trib = TRIBES[o.tribe];
+  if(o.type==='parts_for_favor')    return `${trib.emoji} The caravan is buying: ${CARAVAN_PARTS_COST} salvage parts for ${CARAVAN_FAVOR_REWARD} favor with the ${trib.name}.`;
+  if(o.type==='favor_for_parts')    return `${trib.emoji} The caravan is selling: ${CARAVAN_PARTS_REWARD} salvage parts for ${CARAVAN_FAVOR_COST} of your favor with the ${trib.name}.`;
+  return `${trib.emoji} The caravan has a recruit to place: a guaranteed ${trib.name}-aligned monster for ${CARAVAN_RECRUIT_PARTS_COST} salvage parts.`;
+}
+function caravanCanAfford(o){
+  if(!o) return false;
+  if(o.type==='parts_for_favor')    return state.parts.length>=CARAVAN_PARTS_COST;
+  if(o.type==='favor_for_parts')    return favorOf(o.tribe)>=CARAVAN_FAVOR_COST && state.parts.length<14;
+  if(o.type==='recruit_for_salvage')return state.parts.length>=CARAVAN_RECRUIT_PARTS_COST && state.roster.length<rosterCap();
+  return false;
+}
+function rollCaravanOffer(nowMs){
+  state.caravan = {
+    type: CARAVAN_OFFER_TYPES[Math.floor(Math.random()*CARAVAN_OFFER_TYPES.length)],
+    tribe: TRIBE_IDS[Math.floor(Math.random()*TRIBE_IDS.length)],
+    expiresAt: nowMs + CARAVAN_WINDOW_MS,
+  };
+}
+/* The only two call sites are continueSlot() and endBattle()'s shared win/loss
+   tail — never a setInterval, so the Hub banner never needs a live countdown. */
+function tickCaravan(nowMs){
+  if(state.caravan && state.caravan.expiresAt<=nowMs){
+    state.caravan = null;
+    state.caravanNextEligible = nowMs + CARAVAN_MIN_GAP_MS;
+  }
+  if(!state.caravan && nowMs>=(state.caravanNextEligible||0)){
+    if(Math.random()<CARAVAN_SPAWN_CHANCE) rollCaravanOffer(nowMs);
+    else state.caravanNextEligible = nowMs + CARAVAN_MIN_GAP_MS;
+  }
+}
+function acceptCaravanTrade(){
+  const o = state.caravan;
+  if(!o || !caravanCanAfford(o)) return;
+  if(o.type==='parts_for_favor'){
+    state.parts.splice(0, CARAVAN_PARTS_COST);
+    addFavor(o.tribe, CARAVAN_FAVOR_REWARD);
+  } else if(o.type==='favor_for_parts'){
+    addFavor(o.tribe, -CARAVAN_FAVOR_COST);
+    for(let i=0;i<CARAVAN_PARTS_REWARD && state.parts.length<14;i++){
+      state.parts.push({ uid: uid(), key: ENEMY_IDS[Math.floor(Math.random()*ENEMY_IDS.length)] });
+    }
+  } else if(o.type==='recruit_for_salvage'){
+    state.parts.splice(0, CARAVAN_RECRUIT_PARTS_COST);
+    const owned = state.roster.map(m=>m.speciesId).filter(id=>SPECIES[id] && !SPECIES[id].champion);
+    const id = (owned.length && Math.random()<0.55) ? owned[Math.floor(Math.random()*owned.length)] : WILD_IDS[Math.floor(Math.random()*WILD_IDS.length)];
+    state.roster.push(newMonster(id,1,1));
+  }
+  state.caravan = null;
+  state.caravanNextEligible = Date.now() + CARAVAN_MIN_GAP_MS;
+  autosave();
+  render();
+}
 
 /* ---- Trials: replay a cleared stage under a modifier for salvage ---- */
 const MODIFIERS = {
@@ -1273,7 +1427,7 @@ function cloudSelfTest(){
                   return null;
                 })
                 .catch(()=>null)
-                // 4. the guild council table (step 5) is the most recent migration.
+                // 4. the guild council table (step 5).
                 .then(()=>{
                   return cloudFetch('/rest/v1/guild_council_votes?select=option&limit=1', { method:'GET' }, true)
                     .then(r4=>{
@@ -1283,9 +1437,23 @@ function cloudSelfTest(){
                       } else {
                         add(true, 'Guild council table is present.');
                       }
-                      return { lines: out, fatal:false };
+                      return null;
                     })
-                    .catch(()=>({ lines: out, fatal:false }));
+                    .catch(()=>null)
+                    // 5. the online-now presence table (step 6) is the most recent migration.
+                    .then(()=>{
+                      return cloudFetch('/rest/v1/presence?select=username&limit=1', { method:'GET' }, true)
+                        .then(r5=>{
+                          const m5 = (r5.body && (r5.body.message||r5.body.hint)) || '';
+                          if(r5.status===404 || /could not find the table|does not exist/i.test(String(m5))){
+                            add(false, 'The presence table is missing — run step 6 of SETUP-MULTIPLAYER.md to enable Online Now.');
+                          } else {
+                            add(true, 'Online-now presence table is present.');
+                          }
+                          return { lines: out, fatal:false };
+                        })
+                        .catch(()=>({ lines: out, fatal:false }));
+                    });
                 });
             });
         })
@@ -1299,7 +1467,8 @@ function cloudSelfTest(){
    game never depends on any of it. See SETUP-MULTIPLAYER.md.
    ============================================================ */
 const social = { guild:null, members:[], raid:null, board:[], ladder:[], rank:null, opponent:null,
-                 council:[], councilError:'', status:'', guildError:'', busy:false, lastDuel:null };
+                 council:[], councilError:'', status:'', guildError:'', busy:false, lastDuel:null,
+                 online:[], onlineError:'' };
 
 /* ---- guild progression ----
    Thresholds are cumulative XP. Perks are read from the server-held level and
@@ -1607,6 +1776,31 @@ function ladderReport(won, oppId){
   });
 }
 
+/* ---- online now ----
+   No websockets here — like every other multiplayer surface in this game,
+   "online" is a plain poll: a heartbeat row upserted with the current time,
+   and a read that keeps whatever heartbeat landed inside the last few
+   minutes. A step behind real-time, but honest about it and free on
+   Supabase's tier, same trade-off the whole optional backend already makes. */
+const PRESENCE_WINDOW_MS = 5*60*1000;
+function presenceSync(){
+  if(!signedIn()) return Promise.resolve({ok:false});
+  return rpc('heartbeat', { p_display: legionBanner() },
+    'The online-now upgrade is not installed on your project yet — run step 6 of SETUP-MULTIPLAYER.md, then reload the schema.');
+}
+function presenceFetch(){
+  if(!signedIn()) return Promise.resolve(null);
+  const cutoff = new Date(Date.now() - PRESENCE_WINDOW_MS).toISOString();
+  return restGetDiag('presence?select=user_id,username,last_seen&last_seen=gte.'+encodeURIComponent(cutoff)+'&order=last_seen.desc&limit=50',
+      'The online-now upgrade is not installed on your project yet — run step 6 of SETUP-MULTIPLAYER.md, then reload the schema.')
+    .then(res=>{
+      if(!res.ok){ social.onlineError=res.error; social.online=[]; return null; }
+      social.onlineError='';
+      social.online = res.rows;
+      return social.online;
+    });
+}
+
 /* ============ PERSISTENCE ============ */
 const SAVE_VERSION = 1;
 const SAVE_PREFIX = 'gridlegion.v1.slot';
@@ -1652,6 +1846,15 @@ function serializeSave(){
     bondCounts: state.bondCounts,
     doctrine: state.doctrine,
     archive: state.archive,
+    campaignDetours: state.campaignDetours,
+    streak: state.streak,
+    augments: state.augments,
+    augmentStagesOffered: state.augmentStagesOffered,
+    caravan: state.caravan,
+    caravanNextEligible: state.caravanNextEligible,
+    bestStreak: state.bestStreak,
+    trophyAce: state.trophyAce,
+    trophyVanguard: state.trophyVanguard,
   };
 }
 function validateSave(d){
@@ -1677,6 +1880,14 @@ function reviveMonster(m){
     parts: Array.isArray(m.parts) ? m.parts.filter(k=>!!partInfo(k)).slice(0, slotCap) : [],
     trait: (m.trait && TRAITS[m.trait.key]) ? m.trait : rollTrait(),
     grafts,
+    // Monster Nicknames: a rename and its three milestone counters. A
+    // synthetic revive (e.g. buildDuelUnits rebuilding an opponent from a
+    // ladder snapshot) never passes these, so they default cleanly to "no
+    // history" rather than inheriting anything from wherever the data came from.
+    nickname: (typeof m.nickname==='string' && sanitizeNickname(m.nickname)) ? sanitizeNickname(m.nickname) : null,
+    kills: (typeof m.kills==='number' && isFinite(m.kills) && m.kills>=0) ? Math.floor(m.kills) : 0,
+    timesFielded: (typeof m.timesFielded==='number' && isFinite(m.timesFielded) && m.timesFielded>=0) ? Math.floor(m.timesFielded) : 0,
+    closeCalls: (typeof m.closeCalls==='number' && isFinite(m.closeCalls) && m.closeCalls>=0) ? Math.floor(m.closeCalls) : 0,
   };
 }
 /* Keeps the War Journal readable across app updates: an entry from a build
@@ -1751,6 +1962,8 @@ function applySave(d, slot){
     Object.keys(d.cleared).forEach(k=>{ const n=Number(k); if(n>=1 && n<=9999) state.cleared[n]=true; });
   }
   state.trial = null;
+  state.redeploy = null;
+  state.detour = null;
   state.codex = null;
   if(d.codex && typeof d.codex==='object'){
     const c = codex();
@@ -1809,12 +2022,35 @@ function applySave(d, slot){
       state.doctrine.wins = Math.min(99999, Math.floor(d.doctrine.wins));
     }
   }
+  /* Win streak: same "survives Rebirth" treatment as Doctrine above — it's
+     collected history about how the last several fights actually went, not
+     campaign progress a Rebirth is meant to reset. */
+  state.streak = (typeof d.streak==='number' && isFinite(d.streak)) ? Math.max(-9999, Math.min(9999, Math.floor(d.streak))) : 0;
+  /* Draft Augments: the opposite treatment — these are chosen alongside the
+     roster and formation being reset above, so (unlike Doctrine) they do
+     NOT survive a Rebirth; see doRebirth, which clears both fields below
+     directly rather than routing through here. Only a known augment id, and
+     only a real Draft Augment checkpoint stage, survive revival. */
+  state.augments = {};
+  if(d.augments && typeof d.augments==='object'){
+    AUGMENT_IDS.forEach(id=>{ if(d.augments[id]) state.augments[id] = true; });
+  }
+  state.augmentStagesOffered = {};
+  if(d.augmentStagesOffered && typeof d.augmentStagesOffered==='object'){
+    DRAFT_AUGMENT_STAGES.forEach(s=>{ if(d.augmentStagesOffered[s]) state.augmentStagesOffered[s] = true; });
+  }
   /* Rustbound Archive: a plain discovered-set, also permanent through
      Rebirth (lore learned stays learned) — only a known fragment id with a
      truthy value survives revival. */
   state.archive = {};
   if(d.archive && typeof d.archive==='object'){
     ARCHIVE_FRAGMENTS.forEach(f=>{ if(d.archive[f.id]) state.archive[f.id] = true; });
+  }
+  /* Campaign Map detours: same "permanent through Rebirth" treatment as the
+     Archive above — only a known detour id with a truthy value survives. */
+  state.campaignDetours = {};
+  if(d.campaignDetours && typeof d.campaignDetours==='object'){
+    CAMPAIGN_DETOURS.forEach(det=>{ if(d.campaignDetours[det.id]) state.campaignDetours[det.id] = true; });
   }
   state.favor = {};
   if(d.favor && typeof d.favor==='object'){
@@ -1838,8 +2074,31 @@ function applySave(d, slot){
   if(d.recruited && typeof d.recruited==='object'){
     TRIBE_IDS.forEach(e=>{ if(d.recruited[e]) state.recruited[e]=true; });
   }
+  /* Scavenger Caravan: revived as raw data only — whether the offer is
+     actually still open, or a new one is now due, is re-decided against real
+     time by tickCaravan() right after this call returns (see continueSlot),
+     never here. Only a well-formed offer for a real type/tribe survives. */
+  state.caravan = (d.caravan && typeof d.caravan==='object'
+      && CARAVAN_OFFER_TYPES.indexOf(d.caravan.type)>=0 && TRIBES[d.caravan.tribe]
+      && typeof d.caravan.expiresAt==='number' && isFinite(d.caravan.expiresAt))
+    ? { type: d.caravan.type, tribe: d.caravan.tribe, expiresAt: d.caravan.expiresAt } : null;
+  state.caravanNextEligible = (typeof d.caravanNextEligible==='number' && isFinite(d.caravanNextEligible)) ? d.caravanNextEligible : 0;
+  /* Trophy Case: three permanent high-water marks (see noteTrophy / the win-
+     streak update in endBattle's tail) — same "survives Rebirth" treatment
+     as Doctrine, the Archive and bestDepth above (doRebirth never touches
+     any of them). Each sub-value is sanitized on its own terms. */
+  state.bestStreak = (typeof d.bestStreak==='number' && isFinite(d.bestStreak) && d.bestStreak>=0) ? Math.min(9999, Math.floor(d.bestStreak)) : 0;
+  function reviveTrophy(t){
+    if(!t || typeof t!=='object') return null;
+    if(typeof t.name!=='string' || !t.name) return null;
+    if(typeof t.stage!=='number' || !isFinite(t.stage) || t.stage<1) return null;
+    if(t.speciesKey!==null && !ENEMY_SPECIES[t.speciesKey]) return null;
+    return { name: t.name.slice(0,60), speciesKey: t.speciesKey||null, stage: Math.floor(t.stage) };
+  }
+  state.trophyAce = reviveTrophy(d.trophyAce);
+  state.trophyVanguard = reviveTrophy(d.trophyVanguard);
   state.battle = null; state.lastResult = null; state.lastFusion = null;
-  state.formSelected = null; state.selectedPart = null;
+  state.formSelected = null; state.selectedPart = null; state.campWelcome = null; state.renamingUid = null;
   fuseSelection = [];
   return true;
 }
@@ -1991,6 +2250,8 @@ let state = {
   recruited: {},
   cleared: {},
   trial: null,
+  redeploy: null,
+  redeployPick: null,
   slot: null,
   profileName: 'Legion',
   emblem: [],
@@ -2009,7 +2270,8 @@ let state = {
 };
 
 function newMonster(speciesId, level=1, tier=1, trait){
-  return { uid: uid(), speciesId, level, exp:0, tier, parts:[], trait: trait || rollTrait(), grafts:null };
+  return { uid: uid(), speciesId, level, exp:0, tier, parts:[], trait: trait || rollTrait(), grafts:null,
+    nickname:null, kills:0, timesFielded:0, closeCalls:0 };
 }
 /* Grafts are permanent, harvested from a beast the rust already claimed. */
 const GRAFT_KINDS = {
@@ -2062,6 +2324,12 @@ function initGame(){
   state.duel = null;
   state.raidRun = false;
   state.trial = null;
+  state.redeploy = null;
+  state.redeployPick = null;
+  state.detour = null;
+  state.detourSelected = null;
+  state.mapStageSelected = null;
+  state.campaignDetours = {};
   state.lastFusion = null;
   state.bestDepth = 0;
   state.confirmWipe = null;
@@ -2073,6 +2341,17 @@ function initGame(){
   state.doctrine = { elementTally:{}, formationTally:{front:0,back:0}, kills:{}, wins:0 };
   state.archive = {};
   state.gambit = null;
+  state.streak = 0;
+  state.campWelcome = null;
+  state.augments = {};
+  state.augmentStagesOffered = {};
+  state.augmentDraft = null;
+  state.caravan = null;
+  state.caravanNextEligible = Date.now() + CARAVAN_MIN_GAP_MS;
+  state.bestStreak = 0;
+  state.trophyAce = null;
+  state.trophyVanguard = null;
+  state.renamingUid = null;
 }
 
 function getSpeciesData(speciesId, tier){
@@ -2130,6 +2409,12 @@ function computeStats(monster){
     if(p.bonusStat==='spd') spd = Math.round(spd*(1+p.bonusPct));
     if(!elements.includes(p.element)) elements.push(p.element);
   });
+  activeSetBonuses(monster.parts).forEach(sb=>{
+    if(sb.stat==='hp')  hp  = Math.round(hp *(1+sb.pct));
+    if(sb.stat==='atk') atk = Math.round(atk*(1+sb.pct));
+    if(sb.stat==='def') def = Math.round(def*(1+sb.pct));
+    if(sb.stat==='spd') spd = Math.round(spd*(1+sb.pct));
+  });
   const g = graftsOf(monster);
   if(g){
     if(g.atk) atk = Math.round(atk * Math.pow(1.10, g.atk));
@@ -2146,7 +2431,11 @@ function computeStats(monster){
   }
   const corruption = monsterCorruption(monster);
   return {
-    name: sd.name, emoji: sd.emoji + ((monster.parts||[]).length?'⚙':''), sprite: sd.sprite,
+    // A nickname (see Monster Nicknames) fully replaces the display name,
+    // same as renaming a legion or a guild does elsewhere in this game —
+    // baseName keeps the species name available for anywhere that still
+    // wants to show it (a nicknamed monster's own card, mainly).
+    name: monster.nickname || sd.name, baseName: sd.name, emoji: sd.emoji + ((monster.parts||[]).length?'⚙':''), sprite: sd.sprite,
     element: sd.element, elements, innate, hybrid: !!sd.hybrid, skill: sd.skill,
     trait: tr || null, tier: monster.tier, grafts: g,
     hp, atk, def, spd, corruption,
@@ -2523,8 +2812,14 @@ function doRebirth(){
   state.formation.front = starters.map(m=>m.uid);
   state.formation.back = [null,null,null];
   state.formSelected = null;
+  state.renamingUid = null;   // the roster it pointed at is gone
   state.intel = { history: [], wins: 0 };
   state.stage = 1;
+  /* Draft Augments are chosen for THIS build, alongside the roster and
+     formation just reset above — unlike Doctrine, Bonds and the Archive,
+     they do not carry into the next life. The checkpoints re-offer fresh. */
+  state.augments = {};
+  state.augmentStagesOffered = {};
   const pct = Math.round((rebirthMultiplier()-1)*100);
   journalAdd({
     id: uid(), stage: fromStage, deep: wasDeep, win: true, boss: null,
@@ -2556,6 +2851,37 @@ function doSaveLegionName(){
   setLegionName(readInput('idn_name'));
   sfx('click');
   render();
+}
+/* ============ AUTO USERNAME ============
+   Every fresh save already carries a name — legionBanner() reads
+   state.profileName into the Guild roster, the raid board, the Ladder and
+   now Online Now, exactly the same field the player can rename by hand from
+   Legion Identity above. A brand-new account signing up for the first time
+   has almost always never touched that screen, so it would otherwise show
+   up next to everyone else's legion as the same generic "Legion" — this
+   gives it something distinctive instead, the moment the account exists. */
+const USERNAME_ADJ = ['Iron','Rust','Volt','Ember','Aqua','Terra','Gale','Shadow','Chrome','Scrap','Blitz','Ashen'];
+const USERNAME_NOUN = ['Vanguard','Scout','Warden','Reclaimer','Rustbound','Sentinel','Rider','Forgemaster','Wraith','Raider'];
+function generateUsername(){
+  const adj = USERNAME_ADJ[Math.floor(Math.random()*USERNAME_ADJ.length)];
+  const noun = USERNAME_NOUN[Math.floor(Math.random()*USERNAME_NOUN.length)];
+  const num = 100 + Math.floor(Math.random()*900);
+  // Truncate the word half only, never the number — a cut-off "Shadow
+  // Forgemaster9" reads as a typo, "ShadowForgema999" still reads as a name.
+  return (adj + noun).slice(0,15) + num;
+}
+/* Only overwrites a legion that has never been given a real name — the
+   untouched defaults startGame() and newSlot() hand out on their own when
+   the player leaves the name field blank. A name the player already chose,
+   on this legion or a prior save, is never clobbered. */
+function isDefaultLegionName(name){
+  return !name || name==='Legion' || /^Legion \d+$/.test(name);
+}
+function assignDefaultUsername(){
+  if(isDefaultLegionName(state.profileName)){
+    state.profileName = generateUsername();
+    autosave();
+  }
 }
 /* Record everything a battle puts in front of the player. */
 function codexRecordBattle(){
@@ -2693,7 +3019,7 @@ function renderJournal(){
     return `
     <div style="margin-bottom:14px; padding-bottom:12px; border-bottom:1px dashed var(--border);">
       <div class="row" style="justify-content:space-between; align-items:baseline;">
-        <div style="font-size:19px; color:${e.win?'var(--gold)':'var(--danger)'};">${e.boss?'☠ ':''}${escapeHtml(label)}${e.boss?' — '+escapeHtml(e.boss):(e.win?' — victory':' — defeat')}</div>
+        <div style="font-size:19px; color:${e.win?'var(--gold)':'var(--danger)'};">${e.redeploy?'🔁 ':''}${e.boss?'☠ ':''}${escapeHtml(label)}${e.boss?' — '+escapeHtml(e.boss):(e.win?' — victory':' — defeat')}</div>
         <div class="dim" style="font-size:13px;">${when.toLocaleDateString()}</div>
       </div>
       <div class="storytext">${escapeHtml(e.text)}</div>
@@ -2814,16 +3140,22 @@ function render(){
   else if(state.screen==='transfer') app.innerHTML = renderTransfer();
   else if(state.screen==='account') app.innerHTML = renderAccount();
   else if(state.screen==='trials') app.innerHTML = renderTrials();
+  else if(state.screen==='redeploy') app.innerHTML = renderRedeploy();
+  else if(state.screen==='campaignmap') app.innerHTML = renderCampaignMap();
+  else if(state.screen==='camp') app.innerHTML = renderCamp();
   else if(state.screen==='tribes') app.innerHTML = renderTribes();
   else if(state.screen==='missions') app.innerHTML = renderMissions();
   else if(state.screen==='codex') app.innerHTML = renderCodex();
   else if(state.screen==='guild') app.innerHTML = renderGuild();
   else if(state.screen==='ladder') app.innerHTML = renderLadder();
+  else if(state.screen==='online') app.innerHTML = renderOnline();
   else if(state.screen==='legionid') app.innerHTML = renderLegionId();
   else if(state.screen==='journal') app.innerHTML = renderJournal();
   else if(state.screen==='archive') app.innerHTML = renderArchive();
   else if(state.screen==='depthchart') app.innerHTML = renderDepthChart();
+  else if(state.screen==='trophycase') app.innerHTML = renderTrophyCase();
   else if(state.screen==='gambit') app.innerHTML = renderGambit();
+  else if(state.screen==='augment') app.innerHTML = renderAugmentDraft();
   else if(state.screen==='commander') app.innerHTML = renderCommanderRank();
   else if(state.screen==='roster') app.innerHTML = renderRoster();
   else if(state.screen==='formation') app.innerHTML = renderFormation();
@@ -2944,9 +3276,21 @@ function newSlot(i){
 function continueSlot(i){
   const d = readSlot(i);
   if(!d){ render(); return; }
+  const prevSavedAt = (typeof d.savedAt==='number' && isFinite(d.savedAt) && d.savedAt>0) ? d.savedAt : null;
   applySave(d, i);
   state.saveState = 'saved';
-  state.screen = 'hub';
+  // Compute the "while you were out" bonus, if any, then immediately
+  // re-save — this both keeps the grant from being lost if the tab closes
+  // before the next autosave, and stamps a fresh savedAt so backing out to
+  // Legions and hitting Continue again right away can't roll it twice.
+  state.campWelcome = prevSavedAt ? campWelcomeBonus(Date.now()-prevSavedAt) : null;
+  // Re-sync the caravan's clock against real elapsed time the instant a save
+  // loads, same reasoning as the away-time bonus just above: an offer left
+  // open when the tab closed should read as expired (or a fresh one eligible)
+  // by the time the player is back, not frozen at however it last looked.
+  tickCaravan(Date.now());
+  autosave();
+  state.screen = 'camp';
   render();
 }
 function wipeSlot(i){
@@ -3034,7 +3378,7 @@ function startTutorial(){
   state.intel = { history:[], wins:0 };
   state.stage = 1;
   state.tutorial = { step:0, done:false, seen:[] };
-  state.trial = null; state.duel = null; state.raidRun = false;
+  state.trial = null; state.duel = null; state.raidRun = false; state.redeploy = null; state.detour = null;
   audioResume();
   beginBattle();
 }
@@ -3203,6 +3547,12 @@ function renderHub(){
     <div class="terrain-banner">🗺 TERRAIN: <b>${terrain.name}</b> — ${terrain.desc}</div>
     ${intelHtml}
     ${doctrineHtml}
+    ${state.caravan ? `<div class="caravan-banner">🐫 <b>SCAVENGER CARAVAN</b><br>
+      ${caravanOfferText(state.caravan)}<br>
+      <button class="btn small ${caravanCanAfford(state.caravan)?'primary':''}" style="margin-top:4px;" ${caravanCanAfford(state.caravan)?'':'disabled'} onclick="acceptCaravanTrade()">Trade</button>
+      ${caravanCanAfford(state.caravan)?'':'<span class="dim"> — can\'t make this trade right now.</span>'}
+    </div>` : ''}
+    ${AUGMENT_IDS.some(hasAugment) ? `<p class="dim">🎴 Augments: ${AUGMENT_IDS.filter(hasAugment).map(id=>AUGMENTS[id].name).join(', ')}</p>` : ''}
     <div class="row" style="margin-top:14px;">
       <button class="btn" onclick="goRoster()">📋 Roster & Fusion (${state.roster.length})</button>
       <button class="btn" onclick="goFormation()">⚔ Formation (${filled}/6)</button>
@@ -3213,13 +3563,18 @@ function renderHub(){
       <button class="btn" onclick="goArchive()">📜 Archive (${archiveFoundCount()}/${ARCHIVE_FRAGMENTS.length})</button>
       <button class="btn" onclick="goMissions()">📋 Orders (${dailyProgress().done}/${dailyProgress().total}${dailyProgress().unclaimed?' ✦':''})</button>
       ${clearedStages().length?`<button class="btn" onclick="goTrials()">☠ Trials (${clearedStages().length})</button>`:''}
+      ${clearedStages().length?`<button class="btn" onclick="goRedeploy()">🔁 Redeployment (${clearedStages().length})</button>`:''}
+      <button class="btn" onclick="goCampaignMap()">🧭 Campaign Map</button>
+      <button class="btn" onclick="goCamp()">⛺ The Camp</button>
       <button class="btn" onclick="goJournal()">📔 War Journal${state.journal&&state.journal.length?' ('+state.journal.length+')':''}</button>
       <button class="btn" onclick="goDepthChart()">🗺 Depth Chart</button>
+      <button class="btn" onclick="goTrophyCase()">🏆 Trophy Case</button>
       <button class="btn" onclick="goCommanderRank()">🎖 Commander Rank ${commander.level}</button>
     </div>
     <div class="row" style="margin-top:10px; align-items:center;">
       <button class="btn small" onclick="goGuild()">🛡 Guild</button>
       <button class="btn small" onclick="goLadder()">🏆 Ladder</button>
+      <button class="btn small" onclick="goOnline()">📡 Online Now</button>
       <button class="btn small audio-btn" onclick="toggleTactical()">${state.tactical?'🧠 Tactical':'⚡ Live'}</button>
       <button class="btn small audio-btn" onclick="toggleSfx()">${audio.sfx?'🔊':'🔇'} SFX</button>
       <button class="btn small audio-btn" onclick="toggleMusic()">${audio.music?'🎵':'🚫'} Music</button>
@@ -3234,6 +3589,7 @@ function renderHub(){
   <div class="panel" style="text-align:center;">
     <button class="btn primary" style="font-size:24px;" ${filled===0?'disabled':''} onclick="goGambitOrBattle()">⚡ DEPLOY TO BATTLE ⚡</button>
     ${filled===0?'<p class="dim">Assign at least one monster to your formation first.</p>':''}
+    ${winStreakLevel()>0?`<p class="dim">🔥 ${winStreakLevel()} in a row — Legion Gauge charges ${Math.round(WIN_STREAK_GAUGE_PER*winStreakLevel()*100)}% faster, salvage odds +${Math.round(WIN_STREAK_SALVAGE_PER*winStreakLevel()*100)}%.</p>`:''}
   </div>`;
 }
 /* ============ ACCOUNT ============ */
@@ -3332,6 +3688,7 @@ function doSignUp(){
   cloudSignUp(email, password).then(r=>{
     cloud.busy = false;
     if(!r.ok){ cloud.status='error'; cloud.message=r.error; render(); return; }
+    assignDefaultUsername();   // give a brand-new registration something better than "Legion" to show up as
     if(r.needsConfirm){
       cloud.status='signed-out';
       cloud.message='Account created — check your email to confirm it, then sign in.';
@@ -3381,6 +3738,11 @@ function goGuild(){
 function goLadder(){
   state.screen='ladder'; social.status=''; render();
   if(signedIn()) ladderFetch().then(()=>render());
+}
+function goOnline(){
+  state.screen='online'; render();
+  if(!signedIn()) return;
+  presenceSync().then(()=>presenceFetch()).then(()=>render());
 }
 function needAccountPanel(what){
   return `
@@ -3578,10 +3940,32 @@ function doRaidStart(){
 function startRaidRun(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.status='Assign a formation first.'; render(); return; }
-  state.raidRun = true; state.duel = null; state.trial = null;
+  state.raidRun = true; state.duel = null; state.trial = null; state.redeploy = null; state.detour = null;
   beginBattle();
 }
 function endRaidRun(){ state.raidRun=false; state.battle=null; state.screen='guild'; render(); raidFetch().then(()=>render()); }
+
+/* ============ ONLINE NOW ============ */
+function renderOnline(){
+  if(!signedIn()) return needAccountPanel('ONLINE NOW');
+  const errMsg = social.onlineError ? `<p style="color:var(--danger)">⚠ ${escapeHtml(social.onlineError)}</p>` : '';
+  const rows = social.online.map(r=>{
+    const me = cloud.session && r.user_id===cloud.session.user.id;
+    return `<div style="color:${me?'var(--gold)':'var(--text)'}">📡 ${escapeHtml(r.username)}${me?' ← you':''}
+      <span class="dim" style="font-size:14px;">active ${timeAgo(r.last_seen)}</span></div>`;
+  }).join('') || '<div class="dim">Nobody else is online right now — you\'re early, or everyone\'s mid-fight.</div>';
+  return `
+  <div class="panel">
+    <h2 class="section">ONLINE NOW</h2>
+    <p class="dim">A poll, not a live feed — this refreshes whenever you open the screen, so it can lag behind by a few minutes.</p>
+    ${errMsg}
+  </div>
+  <div class="panel">
+    <h2 class="section">${social.online.length} COMMANDER${social.online.length===1?'':'S'} ONLINE</h2>
+    <div class="testbox">${rows}</div>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
 
 function renderLadder(){
   if(!signedIn()) return needAccountPanel('LADDER');
@@ -3631,7 +4015,7 @@ function startDuel(){
   const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
   if(!filled){ social.status='Assign a formation first.'; render(); return; }
   state.duel = { userId: opp.user_id, name: opp.display_name, formation: opp.formation || {units:[]} };
-  state.raidRun = false; state.trial = null;
+  state.raidRun = false; state.trial = null; state.redeploy = null; state.detour = null;
   social.lastDuel = null;
   beginBattle();
 }
@@ -3859,6 +4243,279 @@ function endTrial(){
   autosave();
   render();
 }
+
+/* ---- Redeployment: re-fight a cleared stage at its own, ordinary difficulty ----
+   Trials trade a handicap for salvage-only pay, and deliberately skip EXP,
+   recruits and every long-lived tally — they're a side activity, not a real
+   fight. Redeployment is the opposite kind of "go back": no handicap, no
+   inflated haul, just the stage's own honest rewards, so a legion that's
+   outgrown Stage 2 can send a fresh, low-level recruit back there to
+   actually catch up instead of getting thrown at the current frontier (or a
+   Trial, which was never built to hand out EXP or new monsters at all).
+   Because it's a real fight, it flows through the exact same win/loss
+   resolution as any other battle in endBattle() — Doctrine, tribe favour,
+   Battle-Forged Bonds and the War Journal all still apply — by swapping
+   state.stage for the fight's duration and restoring it afterward, the same
+   swap-and-restore Trials already established with stageBeforeTrial. */
+function goRedeploy(){ state.screen='redeploy'; state.redeployPick=null; render(); }
+function renderRedeploy(){
+  const list = clearedStages();
+  if(!list.length){
+    return `
+    <div class="panel">
+      <h2 class="section">REDEPLOYMENT</h2>
+      <p class="dim">Clear a stage first. Any stage you've beaten stays reachable here, at its own ordinary difficulty.</p>
+    </div>
+    <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+  }
+  const pick = (state.redeployPick && list.indexOf(state.redeployPick.stage)>=0) ? state.redeployPick : { stage:list[0] };
+  state.redeployPick = pick;
+  const stageBtns = list.map(n=>`
+    <button class="btn small ${pick.stage===n?'primary':''}" onclick="pickRedeployStage(${n})">
+      ${isDeep(n)?'D'+deepDepth(n):n}${bossForStage(n)?' ☠':''}
+    </button>`).join('');
+  const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+  return `
+  <div class="panel">
+    <h2 class="section">REDEPLOYMENT</h2>
+    <p class="dim">Re-fight any stage you've already cleared, at its own ordinary difficulty — full EXP, a real shot at a recruit, normal salvage. No handicap, no bonus haul, and it never touches your place at the frontier. Good ground to season a fresh recruit before you throw them at the real fight.</p>
+    <div class="dim" style="margin-top:8px;">Stage</div>
+    <div class="row">${stageBtns}</div>
+    <button class="btn primary" style="margin-top:12px;" ${filled?'':'disabled'} onclick="beginRedeploy()">🔁 REDEPLOY TO ${isDeep(pick.stage)?'DEPTH '+deepDepth(pick.stage):'STAGE '+pick.stage}</button>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+function pickRedeployStage(n){ state.redeployPick = { stage:n }; render(); }
+function beginRedeploy(){
+  const pick = state.redeployPick;
+  if(!pick || clearedStages().indexOf(pick.stage)<0) return;
+  state.redeploy = { stage: pick.stage };
+  state.stageBeforeRedeploy = state.stage;
+  state.stage = pick.stage;
+  beginBattle();
+}
+function endRedeploy(){
+  state.stage = state.stageBeforeRedeploy || state.stage;
+  state.redeploy = null;
+  state.battle = null;
+  state.screen = 'hub';
+  autosave();
+  render();
+}
+
+function goCampaignMap(){ state.screen='campaignmap'; state.detourSelected=null; state.mapStageSelected=null; render(); }
+function selectDetour(id){ state.detourSelected = id; state.mapStageSelected = null; render(); }
+/* Toggles a main-line stage node: tapping the same stage again closes its
+   panel rather than re-opening it. Locked (uncleared) stages are still
+   selectable — the panel just explains why there's nothing to do there yet
+   — mirroring how a locked detour behaves. */
+function selectMapStage(n){
+  state.mapStageSelected = (state.mapStageSelected===n) ? null : n;
+  state.detourSelected = null;
+  render();
+}
+/* Reuses Redeployment wholesale rather than inventing a second "go fight an
+   old stage" path: the map's stage nodes are just another door into the
+   same, already-tested flow (ordinary difficulty and rewards, your place
+   in the campaign untouched — see beginRedeploy/endRedeploy above). */
+function redeployFromMap(n){
+  state.redeployPick = { stage: n };
+  beginRedeploy();
+}
+function beginDetour(id){
+  const det = CAMPAIGN_DETOURS.find(d=>d.id===id);
+  if(!det || !detourAvailable(det)) return;
+  state.detour = { id: det.id };
+  state.stageBeforeDetour = state.stage;
+  state.stage = det.afterStage;
+  beginBattle();
+  logMsg(`🧭 A detour: ${det.name} — tougher ground, worth the risk.`);
+}
+function endDetour(){
+  state.stage = state.stageBeforeDetour || state.stage;
+  state.detour = null;
+  state.battle = null;
+  state.screen = 'hub';
+  autosave();
+  render();
+}
+function renderCampaignMap(){
+  const n = CAMPAIGN_LENGTH, spineY = 46, leftX = 40, rightX = 600;
+  const stepX = (rightX-leftX) / (n-1);
+  const here = !isDeep(state.stage) ? state.stage : null;
+  const xFor = s => leftX + (s-1)*stepX;
+
+  let nodes = '';
+  for(let s=1; s<=n; s++){
+    const x = xFor(s);
+    const boss = bossForStage(s);
+    const cleared = !!state.cleared[s];
+    const r = boss ? 12 : 7;
+    const color = boss ? 'var(--gold)' : 'var(--nature)';
+    // A larger, invisible hit-circle makes every stage tappable (not just
+    // the boss nodes' bigger visible ring) without changing how anything
+    // looks.
+    nodes += `<circle cx="${x}" cy="${spineY}" r="${r+7}" fill="transparent" style="cursor:pointer;" onclick="selectMapStage(${s})"/>`;
+    nodes += `<circle cx="${x}" cy="${spineY}" r="${r}" fill="${color}" fill-opacity="${cleared?0.85:0.1}" stroke="${color}" stroke-width="2" style="pointer-events:none;"/>`;
+    if(boss) nodes += `<text x="${x}" y="${spineY+4}" text-anchor="middle" font-size="11" style="pointer-events:none;">☠</text>`;
+    if(here===s) nodes += `<circle cx="${x}" cy="${spineY}" r="${r+5}" fill="none" stroke="var(--gold)" stroke-width="2" stroke-dasharray="2 2" style="pointer-events:none;"/>`;
+    nodes += `<text x="${x}" y="${spineY+24}" text-anchor="middle" font-size="11" fill="var(--dim)" style="pointer-events:none;">${s}</text>`;
+  }
+  const spine = `<line x1="${leftX}" y1="${spineY}" x2="${rightX}" y2="${spineY}" stroke="var(--border)" stroke-width="2"/>`;
+
+  let branches = '';
+  CAMPAIGN_DETOURS.forEach(det=>{
+    const x = xFor(det.afterStage), by = spineY + 55;
+    const claimed = claimedDetour(det.id);
+    const avail = detourAvailable(det);
+    const color = claimed ? 'var(--gold)' : (avail ? 'var(--volt)' : 'var(--dim)');
+    branches += `<line x1="${x}" y1="${spineY+8}" x2="${x}" y2="${by-9}" stroke="${color}" stroke-width="1.5"/>`;
+    branches += `<circle cx="${x}" cy="${by}" r="9" fill="${color}" fill-opacity="${claimed?0.85:(avail?0.3:0.08)}" stroke="${color}" stroke-width="2" style="cursor:pointer;" onclick="selectDetour('${det.id}')"/>`;
+    branches += `<text x="${x}" y="${by+4}" text-anchor="middle" font-size="10" style="pointer-events:none;">${claimed?'✓':'🧭'}</text>`;
+  });
+
+  const svgH = spineY + 55 + 20;
+  const svg = `<svg viewBox="0 0 640 ${svgH}" width="100%" height="${svgH}" style="display:block;">${spine}${nodes}${branches}</svg>`;
+
+  const sel = state.detourSelected ? CAMPAIGN_DETOURS.find(d=>d.id===state.detourSelected) : null;
+  let detailHtml = '';
+  if(sel){
+    const claimed = claimedDetour(sel.id);
+    const avail = detourAvailable(sel);
+    const locked = !claimed && !avail;
+    detailHtml = `
+    <div class="panel">
+      <h2 class="section">🧭 ${escapeHtml(sel.name)}</h2>
+      <p class="dim">${escapeHtml(sel.desc)}</p>
+      <p class="dim" style="font-size:14px;">Off Stage ${sel.afterStage} — a tougher fight than that wave was. Reward: <b>${claimed?'already claimed':(avail?escapeHtml(sel.rewardDesc):'??? — clear Stage '+sel.afterStage+' first')}</b></p>
+      ${avail?`<button class="btn primary" onclick="beginDetour('${sel.id}')">🧭 TAKE THE DETOUR</button>`:''}
+      ${claimed?`<p class="dim">✓ Claimed — the map remembers, even after a Rebirth.</p>`:''}
+      ${locked?`<p class="dim">Not open yet.</p>`:''}
+    </div>`;
+  }
+  if(!sel && state.mapStageSelected){
+    const s = state.mapStageSelected;
+    const cleared = !!state.cleared[s];
+    const isHere = here===s;
+    const filled = state.formation.front.concat(state.formation.back).filter(Boolean).length;
+    detailHtml = `
+    <div class="panel">
+      <h2 class="section">📍 STAGE ${s}${bossForStage(s)?' ☠':''}</h2>
+      <p class="dim">${escapeHtml(STAGE_STORY[s-1])}</p>
+      ${isHere ? `<p class="dim">This is where your legion stands right now.</p>`
+        : cleared ? `<button class="btn primary" ${filled?'':'disabled'} onclick="redeployFromMap(${s})">🔁 REDEPLOY HERE</button>
+                     <p class="dim" style="font-size:13px; margin-top:6px;">Ordinary rewards, full EXP, a real shot at a recruit — your place at the frontier stays exactly where it is.</p>`
+        : `<p class="dim">Not reached yet.</p>`}
+    </div>`;
+  }
+
+  return `
+  <div class="panel">
+    <h2 class="section">CAMPAIGN MAP</h2>
+    <p class="dim">The road to the gate, and the ground just off it. Tap any stage to revisit it, or a detour marker below the spine for something the main line doesn't hand out.</p>
+  </div>
+  <div class="panel">${svg}</div>
+  ${detailHtml}
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
+/* ================= THE CAMP =================
+   The screen a returning commander lands on instead of a blank hub. Two
+   independent parts:
+   - A small "while you were out" grant (campWelcomeBonus), scaled by real
+     time away and capped so it can never substitute for actually playing —
+     one of salvage, EXP or tribe favour, computed once from continueSlot()'s
+     own save timestamp and immediately re-saved so revisiting Legions and
+     hitting Continue again can't roll it twice.
+   - Flavour commentary (campCommentary) built entirely from data the game
+     already tracks — Rustbound Doctrine, a streak derived from real stage
+     results, the Ladder if it's already loaded — never a new system, never
+     anything that touches battle math. Always shows something, even for a
+     brand-new legion with no history yet.
+   ================================================= */
+const CAMP_MIN_AWAY_MS = 30*60*1000;    // below this, no bonus at all — just flavour
+const CAMP_MAX_AWAY_MS = 24*60*60*1000; // time-away scaling caps here; camping longer buys nothing more
+function campAwayFrac(awayMs){
+  if(typeof awayMs!=='number' || !(awayMs>0) || awayMs<CAMP_MIN_AWAY_MS) return 0;
+  return Math.min(1, (awayMs-CAMP_MIN_AWAY_MS) / (CAMP_MAX_AWAY_MS-CAMP_MIN_AWAY_MS));
+}
+function campWelcomeBonus(awayMs){
+  const frac = campAwayFrac(awayMs);
+  if(frac<=0) return null;
+  const options = ['exp','favor'];
+  if(state.parts.length<14) options.push('salvage');
+  const type = options[Math.floor(Math.random()*options.length)];
+  if(type==='salvage'){
+    const keys = Object.keys(PARTS);
+    const key = keys[Math.floor(Math.random()*keys.length)];
+    state.parts.push({ uid: uid(), key });
+    return { type, key, text: `${PARTS[key].emoji} ${PARTS[key].name} recovered while you were away.` };
+  }
+  if(type==='exp'){
+    const amount = Math.round(4 + frac*10);
+    let levelled = 0;
+    state.roster.forEach(m=>{
+      const before = m.level;
+      m.exp += amount;
+      let need = m.level*10;
+      while(m.exp>=need){ m.exp-=need; m.level++; need=m.level*10; }
+      if(m.level>before) levelled++;
+    });
+    return { type, amount, levelled, text: `The legion kept training on its own — +${amount} EXP to every monster in the roster.` };
+  }
+  const e = TRIBE_IDS[Math.floor(Math.random()*TRIBE_IDS.length)];
+  const amount = Math.round(2 + frac*4);
+  addFavor(e, amount);
+  return { type, element:e, amount, text: `${TRIBES[e].emoji} +${amount} ${TRIBES[e].name} favor — they kept watch while you were gone.` };
+}
+function campCommentary(){
+  const lines = [];
+  const doctElem = doctrineElement();
+  if(doctElem){
+    const tier = doctrineTier();
+    lines.push({ emoji: TRIBES[doctElem].emoji, text: pickText([
+      `The ${TRIBES[doctElem].name} keep the closest eye on your fires — your legion fights ${doctElem.toUpperCase()} more than anything else, and it shows.`,
+      `Word around the ${TRIBES[doctElem].name} camp is that your legion's all but adopted ${doctElem.toUpperCase()} as a second banner.`,
+    ]) + (tier>0 ? ` Escalation tier ${tier}.` : '') });
+  }
+  if(state.streak>0){
+    lines.push({ emoji:'🔥', text: state.streak>=5
+      ? `${state.streak} stages clear in a row now. Even the skeptics by the fire have stopped betting against you.`
+      : `${state.streak} win${state.streak===1?'':'s'} running. Nobody's saying it out loud, but they're keeping count.` });
+  } else if(state.streak<0){
+    const n = -state.streak;
+    lines.push({ emoji:'🩹', text: `${n} rough stage${n===1?'':'s'} in a row. The camp's still behind you — but they've noticed too.` });
+  }
+  if(signedIn() && social.ladder && social.ladder.length){
+    const top = social.ladder[0];
+    lines.push({ emoji:'🏆', text: social.rank
+      ? `Ladder talk: ${top.display_name} holds the top spot this week — you're sitting at #${social.rank}.`
+      : `Ladder talk: ${top.display_name} holds the top spot this week.` });
+  }
+  if(!lines.length) lines.push({ emoji:'⛺', text:'The camp is quiet tonight. No news yet — go make some.' });
+  return lines;
+}
+function goCamp(){ state.screen='camp'; render(); }
+function leaveCamp(){ state.campWelcome = null; state.screen='hub'; render(); }
+function renderCamp(){
+  const bonus = state.campWelcome;
+  const lines = campCommentary();
+  return `
+  <div class="panel" style="text-align:center;">
+    <h2 class="section">⛺ THE CAMP</h2>
+    <p class="dim">${bonus ? 'Welcome back, Commander.' : "The banner's still standing. Everyone's glad to see you."}</p>
+  </div>
+  ${bonus ? `<div class="panel">
+    <h3 style="margin:0 0 6px;">WHILE YOU WERE OUT</h3>
+    <div class="testbox">${escapeHtml(bonus.text)}</div>
+  </div>` : ''}
+  <div class="panel">
+    <h3 style="margin:0 0 6px;">AROUND THE FIRE</h3>
+    <div class="testbox">${lines.map(l=>`<div>${l.emoji} ${escapeHtml(l.text)}</div>`).join('')}</div>
+  </div>
+  <div class="panel footer-nav"><button class="btn primary" onclick="leaveCamp()">Continue to Hub →</button></div>`;
+}
+
 function goRoster(){ state.screen='roster'; render(); }
 function goFormation(){ state.screen='formation'; state.formSelected=null; render(); }
 function goSalvage(){ state.screen='salvage'; state.selectedPart=null; state.harvest=null; state.transfer=null; state.bayMsg=''; render(); }
@@ -3941,7 +4598,8 @@ function renderRoster(){
     <div class="mcard ${sel?'selected':''}" onclick="toggleFuseSelect('${m.uid}')">
       ${m.tier>=3?'<div class="tier3tag">👑</div>':(m.tier>=2?'<div class="tier2tag">★</div>':'')}${isHybridId(m.speciesId)?'<div class="tier2tag" style="left:2px; right:auto; color:var(--wind)">✦</div>':''}
       <div class="emoji">${unitSpriteHtml(st, 40)}</div>
-      <div class="name">${st.name}</div>
+      <div class="name">${escapeHtml(st.name)}</div>
+      ${m.nickname?`<div class="dim" style="font-size:11px; margin-top:-4px;">${escapeHtml(st.baseName)}</div>`:''}
       <div class="lvl">Lv.${m.level}</div>
       ${elemTags(st.elements)}
       ${traitTag(st.trait)}
@@ -4058,6 +4716,10 @@ function renderSalvage(){
     const g = st.grafts;
     const graftLine = g ? `<div style="font-size:12px; color:var(--rust); margin-top:2px;">${
       Object.keys(g).map(k=>`${GRAFT_KINDS[k].emoji}${g[k]>1?('×'+g[k]):''}`).join(' ')}</div>` : '';
+    const setBonuses = activeSetBonuses(m.parts);
+    const setLine = setBonuses.length ? `<div style="font-size:12px; color:var(--gold); margin-top:2px;">${
+      setBonuses.map(sb=>`⚙${sb.count} ${escapeHtml(sb.name)} +${Math.round(sb.pct*100)}% ${STAT_LABEL[sb.stat]}`).join('<br>')}</div>` : '';
+    const flavorLine = monsterFlavorLines(m).map(l=>`<div class="dim" style="font-size:11px; margin-top:2px;">${escapeHtml(l)}</div>`).join('');
 
     const isDonor = busyDonor===m.uid;
     let action = '';
@@ -4065,20 +4727,32 @@ function renderSalvage(){
       action = `<button class="btn small primary" style="margin-top:4px;" onclick="doHarvest('${m.uid}')">Graft here</button>`;
     } else if(mode==='transfer' && !isDonor){
       action = `<button class="btn small primary" style="margin-top:4px;" onclick="doTransfer('${m.uid}')">Carry over</button>`;
+    } else if(!mode && state.renamingUid===m.uid){
+      action = `<div style="margin-top:4px;">
+        <input id="nick_${m.uid}" class="tinput" style="width:100%;" maxlength="16" value="${escapeHtml(m.nickname||'')}" placeholder="${escapeHtml(st.baseName)}">
+        <div style="margin-top:4px;">
+          <button class="btn small primary" onclick="doRenameMonster('${m.uid}')">Save</button>
+          <button class="btn small" onclick="cancelRename()">Cancel</button>
+        </div>
+      </div>`;
     } else if(!mode){
       const bits = [];
       if(canHarvest(m)) bits.push(`<button class="btn small danger" onclick="beginHarvest('${m.uid}')">☢ Harvest</button>`);
       if(m.trait && m.level>=3) bits.push(`<button class="btn small" onclick="beginTransfer('${m.uid}')">↪ Trait</button>`);
+      bits.push(`<button class="btn small" onclick="beginRename('${m.uid}')">✎ Rename</button>`);
       if(bits.length) action = `<div style="margin-top:4px;">${bits.join(' ')}</div>`;
     }
     return `<div class="mcard ${isDonor?'selected':''}" style="width:130px; cursor:default;">
       <div class="emoji">${unitSpriteHtml(st, 44)}</div>
-      <div class="name">${st.name}</div>
+      <div class="name">${escapeHtml(st.name)}</div>
+      ${m.nickname?`<div class="dim" style="font-size:11px; margin-top:-4px;">${escapeHtml(st.baseName)}</div>`:''}
       <div class="lvl">Lv.${m.level}</div>
       ${elemTags(st.elements)}
       ${traitTag(st.trait)}
       ${graftLine}
       <div style="margin-top:4px;">${chips}</div>
+      ${setLine}
+      ${flavorLine}
       ${corruptionBar(st.corruption)}
       ${action}
     </div>`;
@@ -4111,7 +4785,7 @@ function renderSalvage(){
   return `
   <div class="panel">
     <h2 class="section">SALVAGE BAY</h2>
-    <p class="dim">Bolt Rustbound parts onto your beasts. A part grants stats <b>and a second element</b> — which counts toward row synergy, and shields the unit with the most favourable elemental matchup. It also loads the beast with <b>rust</b>. Rusted units seize up mid-battle, and badly rusted ones turn on their own line.</p>
+    <p class="dim">Bolt Rustbound parts onto your beasts. A part grants stats <b>and a second element</b> — which counts toward row synergy, and shields the unit with the most favourable elemental matchup. It also loads the beast with <b>rust</b>. Rusted units seize up mid-battle, and badly rusted ones turn on their own line. Two parts salvaged from the <b>same chassis</b> — raw, forged, Ace-marked or a Vanguard trophy, any mix — add a small bonus of their own on top; three pushes it further.</p>
     <div class="row">${partCards || '<p class="dim">No salvage in storage. Win battles to strip parts from the wreckage.</p>'}</div>
     <p class="dim" style="margin-top:8px;">${state.selectedPart?'Now tap an <b>empty</b> slot on a beast below to install it.':'Tap a part to select it. Tap an installed part to purge it (the part is destroyed).'}</p>
     ${state.bayMsg?`<p style="color:var(--gold)">${escapeHtml(state.bayMsg)}</p>`:''}
@@ -4586,6 +5260,15 @@ function buildPlayerUnits(terrain){
           if(t.bulwark) unit.shield = true;
         });
       }
+      /* Draft Augments: permanent, per-legion, chosen picks (see
+         rollAugmentChoices/AUGMENTS above). Applied last, after every trait
+         and Gambit modifier above, so a plain assignment earlier in this
+         function (like the keen trait's unit.critBonus=0.08) can never
+         clobber it — these only ever add on top of whatever's already there. */
+      if(hasAugment('first_strike')) unit.gambitFirstCrit = true;
+      if(hasAugment('pre_charged')) unit.skillMaxCd = Math.max(1, unit.skillMaxCd-1);
+      if(hasAugment('hardened_line')) unit.bDef = Math.round(unit.bDef*1.08);
+      if(hasAugment('keen_edge')) unit.critBonus = (unit.critBonus||0) + 0.06;
       applyTerrainToUnit(unit, terrain);
       units.push(unit);
     });
@@ -4622,6 +5305,7 @@ function buildEnemyUnits(stage, terrain, adapted, usePlating, platingElem){
   const count = Math.min(3 + Math.floor((stage-1)/2), 6);
   let mult = 1 + (stage-1)*0.14;
   if(isEliteStage(stage)) mult *= 1.25;
+  if(state.detour) mult *= DETOUR_STAT_MULT;
   const units = [];
   for(let i=0;i<count;i++){
     const id = pickEnemySpecies(adapted);
@@ -4683,6 +5367,7 @@ function grantAceDrop(unit){
   const drop = { uid: uid(), key: unit.speciesKey+ACE_SUFFIX };
   state.parts.push(drop);
   logMsg(`⭐ ${unit.name} falls and leaves behind ${partInfo(drop.key).name}!`);
+  noteTrophy('trophyAce', unit);
 }
 /* Rolled specifically on Elite Waves (see buildEnemyUnits) — Aces skip elite
    stages entirely, so this never competes with one for the same wave. Marks
@@ -4713,6 +5398,7 @@ function grantVanguardBounty(unit){
   const drop = { uid: uid(), key: unit.speciesKey+VANGUARD_SUFFIX };
   state.parts.push(drop);
   logMsg(`🛡️ ${unit.name} falls — the very last of its escort — you claim ${partInfo(drop.key).name}!`);
+  noteTrophy('trophyVanguard', unit);
 }
 function checkVanguardBounty(unit){
   if(!unit.isVanguard || unit.vanguardBountyGiven) return;
@@ -4729,6 +5415,105 @@ function onEnemyFainted(unit){
   updateBossShield();
   if(unit.isAce) grantAceDrop(unit);
   checkVanguardBounty(unit);
+}
+
+/* ============ TROPHY CASE ============
+   A pure-fluff Hub screen — nothing here changes how anyone plays. Deepest
+   Reach and the Archive already keep their own permanent record (bestDepth,
+   state.archive); this just gives them a second, more celebratory home.
+   Win streak and the two named-elite kills did NOT already keep a permanent
+   record — state.streak resets to 0 on a single loss, and an Ace/Vanguard's
+   part is an ordinary, purgeable/forgeable salvage-bay item with no memory
+   of its own — so those three get one small high-water-mark field apiece,
+   updated at the exact same spot the ordinary version of the event already
+   fires (grantAceDrop/grantVanguardBounty above; the streak tail below). */
+function noteTrophy(field, unit){
+  const cur = state[field];
+  if(!cur || state.stage > cur.stage){
+    state[field] = { name: unit.name, speciesKey: unit.speciesKey||null, stage: state.stage };
+  }
+}
+function goTrophyCase(){ state.screen='trophycase'; sfx('click'); render(); }
+function renderTrophyCase(){
+  const depth = state.bestDepth||0;
+  const streak = state.bestStreak||0;
+  const ace = state.trophyAce, vanguard = state.trophyVanguard;
+  const cards = [
+    { emoji:'🗺️', label:'Deepest Reach', value: depth>0?('Depth '+depth):'—',
+      note: depth>0?'The furthest this legion has ever pushed into the Deep.':'Clear Stage 10 and keep going to start this one.' },
+    { emoji:'🔥', label:'Longest Win Streak', value: streak>0?(streak+' in a row'):'—',
+      note: streak>0?'The best run of consecutive stage wins this legion has ever put together.':'Win a couple of stages back to back to get this started.' },
+    { emoji:'⭐', label:'Toughest Ace Felled', value: ace?ace.name:'—',
+      note: ace?('Brought down at Stage '+ace.stage+'.'):'Rare named elites start turning up a few stages in — none felled yet.' },
+    { emoji:'🛡️', label:'Toughest Vanguard Felled', value: vanguard?vanguard.name:'—',
+      note: vanguard?('Brought down at Stage '+vanguard.stage+'.'):'Escort leaders show up on Elite Waves — none felled yet.' },
+  ].map(c=>`<div class="pcard" style="width:220px; cursor:default;">
+      <div class="pname">${c.emoji} ${escapeHtml(c.label)}</div>
+      <div style="color:var(--gold); font-size:18px; margin-top:2px;">${escapeHtml(String(c.value))}</div>
+      <div class="dim" style="font-size:13px; margin-top:2px;">${escapeHtml(c.note)}</div>
+    </div>`).join('');
+  const tally = archiveTheoryTally();
+  const theoryLines = Object.keys(ARCHIVE_THEORIES).map(k=>{
+    const total = ARCHIVE_FRAGMENTS.filter(f=>f.theory===k).length;
+    return `<div class="dim" style="font-size:14px; margin-top:2px;">${escapeHtml(ARCHIVE_THEORIES[k].name)}: ${tally[k]||0}/${total}</div>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">TROPHY CASE</h2>
+    <p class="dim">Nothing here changes how you play — it's just one place for this legion's best moments to sit and be looked at.</p>
+    <div class="row" style="margin-top:8px;">${cards}</div>
+  </div>
+  <div class="panel">
+    <h2 class="section">ARCHIVE FINDINGS — ${archiveFoundCount()}/${ARCHIVE_FRAGMENTS.length}</h2>
+    ${theoryLines}
+    <button class="btn small" style="margin-top:8px;" onclick="goArchive()">📜 Open the full Archive</button>
+  </div>
+  <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
+}
+
+/* ============ MONSTER NICKNAMES ============
+   Rename any monster in your roster; the game quietly remembers a few
+   milestones for it — kills, times fielded, a near-death survival — as a
+   line or two of flavor on its Salvage Bay card. All three counters live on
+   the monster object itself (see newMonster/reviveMonster), so they evolve
+   and reset exactly the way parts and levels already do: fusion consumes the
+   parent and its history along with it, Rebirth wipes the roster and starts
+   everyone at zero, same as it always has. Kills are credited off the same
+   killsByUnit tally applyDamage/applyCascadeOverflow already build (right
+   alongside the existing killsBySpecies), and times-fielded/close-calls are
+   read off b.playerUnits in endBattle()'s tail — the same shared ending
+   state.streak and the Caravan already hook, so duels/raids/trials/the
+   tutorial never touch a monster's personal record either. */
+const CLOSE_CALL_HP_FRAC = 0.15;   // ended the fight alive at or below this fraction of max HP
+function monsterFlavorLines(m){
+  const lines = [];
+  const fielded = m.timesFielded||0, kills = m.kills||0, close = m.closeCalls||0;
+  if(fielded===0) return lines;   // nothing to say about a monster that has never deployed
+  if(kills===0) lines.push(`Fielded ${fielded} time${fielded===1?'':'s'}, no confirmed kills yet.`);
+  else if(kills===1) lines.push(`Drew first blood — one confirmed kill in ${fielded} deployment${fielded===1?'':'s'}.`);
+  else if(kills<10) lines.push(`${kills} confirmed kills across ${fielded} deployment${fielded===1?'':'s'}.`);
+  else lines.push(`${kills} confirmed kills. The Rustbound have started keeping a file on this one.`);
+  if(close===1) lines.push(`Walked away from one fight it had no business surviving.`);
+  else if(close>1) lines.push(`${close} near-misses now — it still doesn't know how to stay down.`);
+  return lines;
+}
+/* Nicknames flow straight into computeStats().name, which dozens of
+   pre-existing, unescaped `${...}` templates across the whole file already
+   trust as plain text (battle log lines, War Journal prose, card names —
+   all previously safe only because a species name could never contain
+   markup). Rather than retrofit escaping onto every one of those sites,
+   the nickname is sanitized once, right here at its only entry point, so
+   it is just as safe as a species name everywhere it goes from here on. */
+function sanitizeNickname(raw){ return String(raw||'').replace(/[<>&"']/g,'').replace(/\s+/g,' ').trim().slice(0,16); }
+function beginRename(uid){ if(!findMonster(uid)) return; state.renamingUid = uid; render(); }
+function cancelRename(){ state.renamingUid = null; render(); }
+function doRenameMonster(uid){
+  const m = findMonster(uid); if(!m) return;
+  const name = sanitizeNickname(readInput('nick_'+uid));
+  m.nickname = name || null;
+  state.renamingUid = null;
+  autosave();
+  render();
 }
 
 /* The commander sits in the back, untouchable, while any pylon still stands.
@@ -4887,7 +5672,7 @@ const GAMBITS = {
 };
 const GAMBIT_IDS = Object.keys(GAMBITS);
 function isHardFight(stage){
-  if(state.duel || state.raidRun || state.trial) return false;
+  if(state.duel || state.raidRun || state.trial || state.redeploy) return false;
   return !!bossForStage(stage) || isEliteStage(stage);
 }
 function rollGambitChoices(){
@@ -4900,6 +5685,12 @@ function rollGambitChoices(){
   state.gambit = { stage: state.stage, choices, picked: null };
 }
 function goGambitOrBattle(){
+  if(augmentOfferPending()){
+    rollAugmentChoices();
+    state.screen = 'augment';
+    render();
+    return;
+  }
   if(isHardFight(state.stage)){
     rollGambitChoices();
     state.screen = 'gambit';
@@ -4933,6 +5724,75 @@ function renderGambit(){
   <div class="panel footer-nav"><button class="btn" onclick="cancelGambit()">← Back to Hub</button></div>`;
 }
 
+/* ================= DRAFT AUGMENTS =================
+   Every legion pauses three times across the surface campaign — entering
+   Stage 3, 6 and 8, all ordinary (non-boss, non-warlord) stages, chosen to
+   miss the surface bosses at 5/7/9/10 entirely — to draft one permanent,
+   legion-shaping perk from a pool of five. Different from both existing
+   "pick something" systems on purpose: Loadout Gambit is blind, one battle
+   only, and only ever appears before a hard fight; Commander Rank is
+   automatic, fixed by level, and account-wide forever. This is a seen,
+   deliberate, per-legion choice that compounds for the rest of the run —
+   and, like the roster and formation it's chosen alongside, it does not
+   survive a Rebirth (see doRebirth).
+   Every augment hooks into an existing, already-tested per-unit modifier
+   point in buildPlayerUnits (or the rosterCap chain) — nothing here is a
+   new battle mechanic, just another quiet, permanent multiplier alongside
+   the ones already there (traits, blessings, Gambit, Rebirth's own bonus). */
+const AUGMENTS = {
+  first_strike:    { name:'First Strike',     desc:"Every unit's very first hit each battle lands as a guaranteed critical." },
+  pre_charged:     { name:'Pre-Charged Cores', desc:'Every skill comes off cooldown one turn sooner, all battle, every battle.' },
+  extended_muster: { name:'Extended Muster',   desc:'+1 roster slot cap for this legion.' },
+  hardened_line:   { name:'Hardened Line',     desc:"+8% DEF to your whole legion." },
+  keen_edge:       { name:'Keen Edge',         desc:'+6% critical hit chance for your whole legion.' },
+};
+const AUGMENT_IDS = Object.keys(AUGMENTS);
+const DRAFT_AUGMENT_STAGES = [3, 6, 8];
+function hasAugment(key){ return !!(state.augments && state.augments[key]); }
+function augmentStageClaimed(stage){ return !!(state.augmentStagesOffered && state.augmentStagesOffered[stage]); }
+function augmentOfferPending(){
+  return DRAFT_AUGMENT_STAGES.indexOf(state.stage)>=0 && !augmentStageClaimed(state.stage);
+}
+function rollAugmentChoices(){
+  const pool = AUGMENT_IDS.filter(id=>!hasAugment(id));
+  const choices = [];
+  while(choices.length<3 && pool.length){
+    const i = Math.floor(Math.random()*pool.length);
+    choices.push(pool.splice(i,1)[0]);
+  }
+  state.augmentDraft = { stage: state.stage, choices };
+}
+function pickAugment(id){
+  const d = state.augmentDraft;
+  if(!d || d.choices.indexOf(id)<0) return;
+  state.augments = state.augments || {};
+  state.augments[id] = true;
+  state.augmentStagesOffered = state.augmentStagesOffered || {};
+  state.augmentStagesOffered[d.stage] = true;
+  state.augmentDraft = null;
+  autosave();
+  beginBattle();
+}
+function cancelAugmentDraft(){ state.augmentDraft = null; state.screen = 'hub'; render(); }
+function renderAugmentDraft(){
+  const d = state.augmentDraft;
+  if(!d){ state.screen = 'hub'; return renderHub(); }
+  const cards = d.choices.map(id=>{
+    const a = AUGMENTS[id];
+    return `<button class="btn" style="text-align:left; padding:14px; margin-bottom:8px; width:100%; height:auto;" onclick="pickAugment('${id}')">
+      <div style="font-weight:bold; color:var(--gold);">${a.name}</div>
+      <div class="dim" style="font-size:13px; margin-top:4px; white-space:normal;">${a.desc}</div>
+    </button>`;
+  }).join('');
+  return `
+  <div class="panel">
+    <h2 class="section">🎴 DRAFT AN AUGMENT</h2>
+    <p class="dim">Pick one permanent, legion-shaping perk. It stays with this legion for the rest of the run — until it's reborn.</p>
+  </div>
+  <div class="panel">${cards}</div>
+  <div class="panel footer-nav"><button class="btn" onclick="cancelAugmentDraft()">← Back to Hub</button></div>`;
+}
+
 function beginBattle(){
   const terrain = terrainForStage(state.stage);
   const adapted = currentAdaptation();
@@ -4962,6 +5822,8 @@ function beginBattle(){
     lowestSurvivorPct: null,
     lowestSurvivorId: null,
     gambit: gambitId,
+    reinforced: false,
+    benchAtStart: benchRoster().map(m=>m.uid),
   };
   state.battle.synLabels = {
     front: (playerUnits.find(u=>u.row==='front')||{}).synergyLabel || null,
@@ -5012,10 +5874,64 @@ function logMsg(msg){
 function aliveUnits(){ return state.battle.playerUnits.concat(state.battle.enemyUnits).filter(u=>!u.fainted); }
 function effectiveSpd(u){ return (u.status && u.status.type==='slow') ? Math.round(u.spd*0.7) : u.spd; }
 
+/* ---- Reinforcement Wave: a fight that drags on too long risks a second,
+   smaller Rustbound squad rushing in from the enemy's back row — a
+   mechanical consequence of taking too long, not a telegraphed choice, so
+   unlike Trials/Redeployment there's no pre-battle banner for it. Fires at
+   most once per battle, and only in an ordinary campaign or Deep wave:
+   never against a shielded commander (already its own kind of long fight,
+   with pylons and a reboot to manage), never in a duel (would break the
+   fairness of a formation-vs-formation fight), and never in a raid or
+   Trial, each of which already runs its own separate difficulty layer. A
+   Redeployment is still eligible — it's a real fight in every other sense,
+   so dragging it out should still carry the same risk. */
+const REINFORCE_MIN_ROUND = 6;
+const REINFORCE_CHANCE = 0.3;
+const REINFORCE_STAT_MULT = 0.6;   // "smaller" — noticeably weaker than the wave itself, not a full-strength pile-on
+function reinforcementsEligible(){
+  if(state.duel || state.raidRun || state.trial || tutorialActive()) return false;
+  return !bossForStage(state.stage);
+}
+function maybeSpawnReinforcements(){
+  const b = state.battle;
+  if(!b || b.reinforced || b.rounds < REINFORCE_MIN_ROUND) return;
+  if(!reinforcementsEligible()){ b.reinforced = true; return; }   // never eligible this battle; stop re-checking every round
+  if(Math.random() >= REINFORCE_CHANCE) return;
+  b.reinforced = true;
+  const stage = state.stage;
+  let mult = 1 + (stage-1)*0.14;
+  if(isEliteStage(stage)) mult *= 1.25;
+  mult *= REINFORCE_STAT_MULT;
+  const count = 1 + (Math.random()<0.35 ? 1 : 0);
+  const names = [];
+  for(let n=0;n<count;n++){
+    const id = pickEnemySpecies(b.adapted);
+    const sd = ENEMY_SPECIES[id];
+    const hp = Math.max(1, Math.round(sd.base.hp*mult));
+    const unit = Object.assign(baseUnitDefaults(), {
+      id:'e_r'+n+'_'+id, side:'enemy', row:'back', speciesKey:id, isReinforcement:true,
+      name:sd.name, emoji:sd.emoji, sprite:sd.sprite, element:sd.element, elements:[sd.element],
+      attackElements:[sd.element], skillName:sd.skill,
+      bHp:hp, bAtk:Math.max(1,Math.round(sd.base.atk*mult)), bDef:Math.max(1,Math.round(sd.base.def*mult)), bSpd:Math.max(1,Math.round(sd.base.spd*mult)),
+      maxHp:hp, hp:hp,
+      atk:Math.max(1,Math.round(sd.base.atk*mult)), def:Math.max(1,Math.round(sd.base.def*mult)), spd:Math.max(1,Math.round(sd.base.spd*mult)),
+      skillCd:0, skillMaxCd:3, fainted:false,
+    });
+    if(b.plating){ unit.plating = b.plating; unit.platingPct = platingPct(); }
+    applyTerrainToUnit(unit, b.terrain);
+    unit.atk = unit.bAtk; unit.def = unit.bDef; unit.spd = unit.bSpd;
+    unit.maxHp = unit.bHp; unit.hp = unit.bHp;
+    b.enemyUnits.push(unit);
+    names.push(unit.name);
+  }
+  logMsg(`🚨 REINFORCEMENTS! The fight's dragged on too long — ${names.join(' and ')} rush${count>1?'':'es'} in from the Rustbound's back row!`);
+}
+
 function startRound(){
   const b = state.battle;
   if(!b || b.result) return;
   b.rounds = (b.rounds||0) + 1;
+  maybeSpawnReinforcements();
   b.focusId = null;
   if(tacticalOn()){ beginPlanning(); }
   b.queue = aliveUnits().sort((a,c)=> effectiveSpd(c) - effectiveSpd(a) + (Math.random()-0.5));
@@ -5191,12 +6107,26 @@ function checkTerrainShift(){
   logMsg(`🌎 The field turns — sustained ${best.toUpperCase()} has made this ${b.terrain.name}. ${b.terrain.desc}`);
 }
 
+/* ================= WIN STREAKS =================
+   Reads state.streak (a signed counter The Camp already maintains from real
+   stage results — see endBattle's fall-through tail) rather than keeping a
+   second one: winStreakLevel() just clamps it to "consecutive wins, 0 if
+   the legion is mid-loss-streak or hasn't fought yet" for mechanical use, so
+   Camp's flavour text and this bonus can never drift apart. Two quiet, small
+   effects that build with a clean run and vanish the instant a single loss
+   resets state.streak back to -1 — nothing that swings a fight on its own,
+   just real momentum for the back half of a good run. */
+const WIN_STREAK_CAP = 5;              // consecutive wins beyond this add nothing more
+const WIN_STREAK_GAUGE_PER = 0.02;     // +2% Legion Gauge gain per streak level (max +10%)
+const WIN_STREAK_SALVAGE_PER = 0.02;   // +2% chance at the ordinary ungated salvage roll, per level (max +10%)
+function winStreakLevel(){ return Math.max(0, Math.min(WIN_STREAK_CAP, state.streak||0)); }
 function chargeGauge(amount){
   const b = state.battle;
   if(activeBlessing()==='volt') amount *= 1.25;
   if(hasPerk('gauge')) amount *= 1.15;
   if(b.gambit==='overclock') amount *= 1.25;
   if(b.gambit==='bulwark') amount *= 0.85;
+  amount *= 1 + WIN_STREAK_GAUGE_PER*winStreakLevel();
   const totalHp = b.playerUnits.reduce((s,u)=>s+u.maxHp,0);
   const curHp = b.playerUnits.reduce((s,u)=>s+(u.fainted?0:u.hp),0);
   const desperate = totalHp>0 && (curHp/totalHp) < 0.4;
@@ -5264,6 +6194,10 @@ function applyDamage(attacker, defender, isSkill){
       if(attacker.speciesId){
         const kb = state.battle.killsBySpecies || (state.battle.killsBySpecies = {});
         kb[attacker.speciesId] = (kb[attacker.speciesId]||0) + 1;
+      }
+      if(attacker.monsterUid){
+        const ku = state.battle.killsByUnit || (state.battle.killsByUnit = {});
+        ku[attacker.monsterUid] = (ku[attacker.monsterUid]||0) + 1;
       }
     }
   }
@@ -5356,6 +6290,10 @@ function applyCascadeOverflow(attacker, target, overflow, strikeElem){
       if(attacker.speciesId){
         const kb = state.battle.killsBySpecies || (state.battle.killsBySpecies = {});
         kb[attacker.speciesId] = (kb[attacker.speciesId]||0) + 1;
+      }
+      if(attacker.monsterUid){
+        const ku = state.battle.killsByUnit || (state.battle.killsByUnit = {});
+        ku[attacker.monsterUid] = (ku[attacker.monsterUid]||0) + 1;
       }
     }
   }
@@ -5830,11 +6768,62 @@ function battleJournalEntry(result){
   if(losses>0){
     sentences.push(`${losses} beast${losses===1?'':'s'} fainted before it was over.`);
   }
+  if(b.reinforced){
+    sentences.push(win
+      ? pickText([`Reinforcements rushed in partway through — the legion closed it out anyway.`, `A second wave piled on midway. Didn't matter.`])
+      : pickText([`Reinforcements rushed in partway through and tipped it.`, `A second wave arrived midway and the legion couldn't recover.`]));
+  }
 
   return {
     id: uid(), stage: state.stage, deep, win, boss: bossDef ? bossDef.name : null,
-    text: sentences.join(' '), at: Date.now(),
+    text: sentences.join(' '), at: Date.now(), redeploy: !!state.redeploy,
   };
+}
+
+/* ---- Field Promotions: a bench monster that sat out this fight has a
+   small, independent chance to pick something up anyway — a trait reroll,
+   a sliver of EXP, or (rarely) a full level — "learning from the
+   sideline." Applies to any real fight, win or lose, the same way a
+   Redeployment does: duels, raids and Trials are excluded because each
+   already runs outside the legion's normal progression, and the tutorial
+   never reaches this code at all (endBattle returns before this point
+   whenever state.tutorial is active).
+
+   Eligibility is checked against state.battle.benchAtStart — the bench as
+   it stood the moment this battle began, snapshotted in beginBattle() —
+   rather than the live bench at endBattle() time. Winning a fight can add
+   a freshly-captured recruit straight onto the bench a few lines above this
+   one; that recruit never actually sat out THIS fight (it didn't exist yet
+   when it started), so it isn't eligible for it. */
+const FIELD_PROMO_CHANCE = 0.07;
+function benchRoster(){
+  const deployed = {};
+  state.formation.front.concat(state.formation.back).forEach(uid=>{ if(uid) deployed[uid]=true; });
+  return state.roster.filter(m=>!deployed[m.uid]);
+}
+function applyFieldPromotions(){
+  if(state.duel || state.raidRun || state.trial) return [];
+  const b = state.battle;
+  const startBench = b && b.benchAtStart;
+  const notes = [];
+  benchRoster().filter(m=>!startBench || startBench.indexOf(m.uid)>=0).forEach(m=>{
+    if(Math.random()>=FIELD_PROMO_CHANCE) return;
+    const name = computeStats(m).name;
+    const roll = Math.random();
+    if(roll<0.25){
+      m.trait = rollTrait();
+      notes.push(`${name} picked up a new trait on the sideline: ${traitName(m.trait)}`);
+    } else if(roll<0.85){
+      const amt = Math.max(1, Math.round(stageExp()*0.25));
+      awardExp([{monsterUid:m.uid}], amt);
+      notes.push(`${name} picked up a sliver of EXP from the sideline`);
+    } else {
+      const need = Math.max(1, m.level*10 - m.exp);
+      const levelled = awardExp([{monsterUid:m.uid}], need);
+      notes.push(levelled.length ? `${name} levelled up just from watching: ${levelled[0]}` : `${name} picked up a sliver of EXP from the sideline`);
+    }
+  });
+  return notes;
 }
 
 function endBattle(result){
@@ -5939,6 +6928,14 @@ function endBattle(result){
     // one more fight together (see recordBattleBonds/applyBattleBonds above).
     recordBattleBonds(b.playerUnits.filter(u=>!u.fainted));
 
+    // Monster Nicknames — close calls: only meaningful on a win, since a loss
+    // means checkBattleEnd() found every player unit fainted already.
+    b.playerUnits.forEach(u=>{
+      if(u.fainted || u.hp<=0 || u.maxHp<=0) return;
+      if((u.hp/u.maxHp) > CLOSE_CALL_HP_FRAC) return;
+      const m = findMonster(u.monsterUid); if(m) m.closeCalls = (m.closeCalls||0) + 1;
+    });
+
     // Tribes notice who actually did the fighting.
     const favorGains = {};
     Object.keys(b.elemDamage).forEach(e=>{
@@ -5957,7 +6954,7 @@ function endBattle(result){
     const pulls = (isEliteStage(state.stage) || isBossWin) ? 2 : 1;
     for(let d=0; d<pulls; d++){
       if(state.parts.length>=14) break;
-      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0))) break;
+      if(d===0 && !isEliteStage(state.stage) && !isBossWin && Math.random() >= ((hasPerk('salvage')?0.85:0.7) + (commanderHasPerk('salvage_pct')?0.10:0) + (codexBonusActive('hybrids')?0.05:0) + WIN_STREAK_SALVAGE_PER*winStreakLevel())) break;
       const keys = b.enemyUnits.map(u=>u.speciesKey).filter(Boolean);
       if(!keys.length) break;
       const drop = { uid: uid(), key: keys[Math.floor(Math.random()*keys.length)] };
@@ -5993,12 +6990,59 @@ function endBattle(result){
     const levelled = awardExp(b.playerUnits, expGain);
     state.lastResult = { win:false, expGain, levelled, dailyDone };
   }
+  // Win streak: how many stage battles in a row have broken the same way
+  // (positive = wins, negative = losses). Pure flavour for The Camp's
+  // commentary — never read anywhere that affects battle odds or rewards.
+  state.streak = (result==='win') ? ((state.streak>0) ? state.streak+1 : 1)
+                                   : ((state.streak<0) ? state.streak-1 : -1);
+  // Trophy Case: a permanent high-water mark, since state.streak itself
+  // resets to 0 the moment a single loss snaps it (only a positive — an
+  // actual win streak — is ever a record worth keeping).
+  if(state.streak > (state.bestStreak||0)) state.bestStreak = state.streak;
+  // Monster Nicknames — every unit that deployed this battle was fielded,
+  // win or lose; kills are credited off the same killsByUnit tally
+  // applyDamage/applyCascadeOverflow build (right beside killsBySpecies).
+  // Same shared tail as the streak/Caravan above, so duels/raids/trials/the
+  // tutorial (which all return earlier) never touch a monster's own record.
+  b.playerUnits.forEach(u=>{
+    const m = findMonster(u.monsterUid); if(!m) return;
+    m.timesFielded = (m.timesFielded||0) + 1;
+  });
+  Object.keys(b.killsByUnit||{}).forEach(uidStr=>{
+    const m = findMonster(uidStr); if(m) m.kills = (m.kills||0) + b.killsByUnit[uidStr];
+  });
+  // Scavenger Caravan: checked here for the same reason streak is updated
+  // here — this tail is the shared ending for normal stage wins, Redeployment
+  // and Campaign Map Detours, and skipped entirely by duels/raids/trials/the
+  // tutorial (which all return earlier above), so a real-time-gated offer only
+  // ever spawns or expires against battles that actually return to the Hub.
+  tickCaravan(Date.now());
+  // Online Now: same shared tail, same exclusions — a fire-and-forget
+  // heartbeat so a legion shows up as active from ordinary play, not only
+  // when the player happens to have the Online Now screen open.
+  if(signedIn()) presenceSync();
+  if(state.redeploy && state.lastResult) state.lastResult.redeploy = true;
   const portrait = victoryPortrait(result);
   journalAdd(battleJournalEntry(result));
   if(portrait && state.journal[0]) state.journal[0].portrait = portrait;
   if(state.lastResult) state.lastResult.portrait = portrait;
+  if(state.detour && state.lastResult){
+    const det = CAMPAIGN_DETOURS.find(d=>d.id===state.detour.id);
+    state.lastResult.detour = true;
+    state.lastResult.detourName = det ? det.name : null;
+    if(det && result==='win' && !claimedDetour(det.id)){
+      const granted = grantDetourReward(det);
+      if(granted){
+        state.campaignDetours = state.campaignDetours || {};
+        state.campaignDetours[det.id] = true;
+        state.lastResult.detourReward = granted;
+      }
+    }
+  }
   const cmdLevelled = commanderAddXp(result==='win' ? (20 + state.stage*2) : (5 + Math.floor(state.stage/2)));
   if(cmdLevelled && state.lastResult) state.lastResult.commanderLevel = cmdLevelled;
+  const fieldPromoNotes = applyFieldPromotions();
+  if(fieldPromoNotes.length && state.lastResult) state.lastResult.fieldPromotions = fieldPromoNotes;
   autosave();
   state.screen = 'result';
   sfx(result==='win' ? 'victory' : 'defeat');
@@ -6063,7 +7107,7 @@ function commanderAddXp(n){
 }
 function rosterCap(){
   return 18 + (commanderHasPerk('roster_slot')?1:0) + (commanderHasPerk('roster_slot2')?1:0)
-       + (codexBonusActive('species')?1:0);
+       + (codexBonusActive('species')?1:0) + (hasAugment('extended_muster')?1:0);
 }
 function goCommanderRank(){ state.screen='commander'; render(); }
 function renderCommanderRank(){
@@ -6097,7 +7141,7 @@ function renderCommanderRank(){
 function victoryPortrait(result){
   const b = state.battle; if(!b || result!=='win') return null;
   const bossDef = bossForStage(state.stage);
-  const finale = state.stage===CAMPAIGN_LENGTH;
+  const finale = state.stage===CAMPAIGN_LENGTH && !state.redeploy;   // a redeploy replay of Stage 10 is not the campaign ending again
   if(!bossDef && !finale) return null;   // only genuinely big wins get a portrait
 
   let mvpId = null, mvpDmg = 0;
@@ -6164,6 +7208,7 @@ function renderUnit(u, activeId, validTargetIds){
     ${u.shielded?`<div class="shield-tag" title="shielded while a pylon stands">🛡 SHIELDED</div>`:''}
     ${u.isAce?`<div class="shield-tag" style="background:var(--gold); color:#241a02;" title="Rustbound Ace — noticeably tougher than its squadmates">⭐ ACE</div>`:''}
     ${u.isVanguard?`<div class="shield-tag" style="background:var(--danger); color:#2a0410;" title="Vanguard — clear its escort first and it drops a unique trophy when it finally falls">🛡️ VANGUARD</div>`:''}
+    ${u.isReinforcement?`<div class="shield-tag" style="background:var(--gold); color:#3a2a00;" title="Reinforcement — rushed in when the fight dragged on too long">🚨 REINFORCEMENT</div>`:''}
     ${u.plating?`<div class="plate-tag" title="counter-plating">▣</div>`:''}
     ${u.corruption?`<div class="rust-tag" title="rust ${u.corruption}">⚙</div>`:''}
     ${u.trait&&!u.corruption?`<div class="rust-tag" style="color:var(--volt)" title="${traitName(u.trait)}: ${traitDesc(u.trait)}">${TRAITS[u.trait.key].emoji}</div>`:''}
@@ -6303,6 +7348,8 @@ function renderBattle(){
   <div class="panel">
     <h2 class="section">${tutorialActive()?'TRAINING DEPLOYMENT':(isDeep(state.stage)?`DEPTH ${deepDepth(state.stage)}`:`STAGE ${state.stage}`)} — ${bossForStage(state.stage)&&!tutorialActive()?'<span style="color:var(--danger)">COMMANDER FIGHT</span>':'BATTLE'}${isEliteStage(state.stage)?' <span style="color:var(--danger)">☠ ELITE</span>':''}</h2>
     ${state.trial?`<div class="boss-banner">☠ TRIAL — ${state.trial.mods.map(id=>MODIFIERS[id].emoji+' '+MODIFIERS[id].name).join(' · ')}</div>`:''}
+    ${state.redeploy?`<div class="boss-banner">🔁 REDEPLOYMENT — ordinary rewards, your place at the frontier is untouched</div>`:''}
+    ${state.detour?`<div class="boss-banner">🧭 DETOUR — a tougher wave, a guaranteed reward if you take it</div>`:''}
     <div class="terrain-banner">🗺 ${b.terrain.name}: ${b.terrain.desc}</div>
     <div class="gauge-wrap">
       <div class="gauge-label">LEGION GAUGE ${Math.floor(b.gauge)}% <span class="dim" style="font-size:13px;">— 🔧33 · 🛡66 · ⚡100</span></div>
@@ -6384,7 +7431,7 @@ function renderResult(){
       <button class="btn primary" style="margin-top:10px;" onclick="endTrial()">Return to Hub →</button>
     </div>`;
   }
-  if(r.win && r.finale){
+  if(r.win && r.finale && !r.redeploy){
     return `
     <div class="panel finale" style="text-align:center;">
       <h1 class="title">THE GATE FALLS</h1>
@@ -6392,6 +7439,7 @@ function renderResult(){
       <p>The forward base burns behind you. Texel breathes again — the tribes hold the surface, and the Rustbound advance is broken.</p>
       <div class="storytext">But the gate opened onto a stairwell, and the stairwell goes down. Whatever built the horde is still down there, still building.</div>
       <p class="dim">Your legion, its salvage and every splice carry onward. The Deep scales without end: elite waves every fifth depth, richer wreckage, and recruits enough to finish an evolution ladder.</p>
+      ${(r.fieldPromotions && r.fieldPromotions.length) ? `<p class="dim" style="font-size:14px;">🎓 ${r.fieldPromotions.map(escapeHtml).join(' · ')}</p>` : ''}
       <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
       <div class="row" style="justify-content:center; margin-top:14px;">
         <button class="btn primary" style="font-size:22px;" onclick="advanceStage()">⬇ DESCEND INTO THE DEEP</button>
@@ -6405,6 +7453,8 @@ function renderResult(){
     return `
     <div class="panel" style="text-align:center;">
       <h1 class="title" style="font-size:20px;">${r.boss?'COMMANDER DOWN!':(r.elite?'ELITE WAVE BROKEN!':'VICTORY!')}</h1>
+      ${r.redeploy?`<p class="dim" style="font-size:14px;">🔁 Redeployment — your place at the frontier is untouched.</p>`:''}
+      ${r.detour?`<p class="dim" style="font-size:14px;">🧭 Detour — ${escapeHtml(r.detourName||'')} — your place at the frontier is untouched.</p>`:''}
       ${r.boss?`<p style="color:var(--danger)">${escapeHtml(r.boss)} is scrap.</p>`:''}
       <p>Your legion held the line at ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`}.</p>
       <p class="dim">Each deployed monster gained ${r.expGain} EXP.</p>
@@ -6416,8 +7466,10 @@ function renderResult(){
       ${(r.newChampions && r.newChampions.length) ? `<p style="color:var(--gold)">★ ${r.newChampions.map(e=>TRIBES[e].name).join(' and ')} will send ${r.newChampions.length===1?'a champion':'champions'} — visit the Tribes camp.</p>` : ''}
       ${r.dom ? `<p class="dim">📡 The Rustbound log your <b>${r.dom.toUpperCase()}</b> assault. Next deployment they will expect <b>${(r.nextAdapt||r.dom).toUpperCase()}</b>.</p>` : ''}
       ${r.archiveFragment ? `<p style="color:var(--gold)">📜 Archive fragment recovered — <span style="cursor:pointer; text-decoration:underline;" onclick="goArchive()">read it</span>.</p>` : ''}
+      ${(r.fieldPromotions && r.fieldPromotions.length) ? `<p class="dim" style="font-size:14px;">🎓 ${r.fieldPromotions.map(escapeHtml).join(' · ')}</p>` : ''}
+      ${r.detourReward ? `<p style="color:var(--gold)">🧭 ${escapeHtml(r.detourReward)}</p>` : ''}
       <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
-      <button class="btn primary" style="margin-top:10px;" onclick="advanceStage()">${isDeep(state.stage)?'Descend further →':'Continue →'}</button>
+      <button class="btn primary" style="margin-top:10px;" onclick="${r.redeploy?'endRedeploy()':(r.detour?'endDetour()':'advanceStage()')}">${(r.redeploy||r.detour)?'Return to Hub →':(isDeep(state.stage)?'Descend further →':'Continue →')}</button>
     </div>
     ${renderVictoryPortrait(r.portrait)}
     ${r.commanderLevel ? `<div class="panel" style="text-align:center;"><p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p></div>` : ''}`;
@@ -6425,13 +7477,16 @@ function renderResult(){
   return `
   <div class="panel" style="text-align:center;">
     <h1 class="title" style="font-size:20px; color:var(--danger);">DEFEAT</h1>
+    ${r.redeploy?`<p class="dim" style="font-size:14px;">🔁 Redeployment — your place at the frontier is untouched.</p>`:''}
+    ${r.detour?`<p class="dim" style="font-size:14px;">🧭 Detour — ${escapeHtml(r.detourName||'')} — your place at the frontier is untouched.</p>`:''}
     <p>Your legion was overrun. The Rustbound advance no further today, but neither do you.</p>
     <p class="dim">Your survivors studied the enemy through the rout — each deployed monster gained ${r.expGain} EXP.</p>
     ${r.levelled && r.levelled.length ? `<p style="color:var(--gold)">⬆ Level up: ${r.levelled.join(', ')}</p>` : ''}
+    ${(r.fieldPromotions && r.fieldPromotions.length) ? `<p class="dim" style="font-size:14px;">🎓 ${r.fieldPromotions.map(escapeHtml).join(' · ')}</p>` : ''}
     <p class="dim">Adjust your formation, re-plate your beasts, and go again.</p>
     <p class="dim" style="font-size:15px;">📔 <span style="cursor:pointer; text-decoration:underline;" onclick="goJournal()">Read it in your War Journal</span></p>
     ${r.commanderLevel ? `<p style="color:var(--gold)">🎖 Commander Rank up! You are now Level ${r.commanderLevel}.</p>` : ''}
-    <button class="btn primary" style="margin-top:10px;" onclick="retryStage()">Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →</button>
+    <button class="btn primary" style="margin-top:10px;" onclick="${r.redeploy?'endRedeploy()':(r.detour?'endDetour()':'retryStage()')}">${(r.redeploy||r.detour)?'Return to Hub →':`Retry ${isDeep(state.stage)?`Depth ${deepDepth(state.stage)}`:`Stage ${state.stage}`} →`}</button>
   </div>`;
 }
 function finishTutorial(){
