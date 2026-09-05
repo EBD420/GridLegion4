@@ -93,6 +93,7 @@ const SUITES = [
   { label:'field-companion',    harness:'dom-storage-server.js', assert:true, files:['57-field-companion.js'] },
   { label:'the-undercroft',     harness:'dom-storage-server.js', assert:true, files:['58-the-undercroft.js'] },
   { label:'mercenary-contract', harness:'dom-storage-server.js', assert:true, files:['59-mercenary-contract.js'] },
+  { label:'energy',             harness:'dom-storage-server.js', assert:true, files:['60-energy.js'] },
 ];
 
 let totalPass = 0, totalFail = 0;

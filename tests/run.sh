@@ -94,6 +94,7 @@ run black-market        dom-storage-server.js "$H/assert.js" "$S/56-black-market
 run field-companion     dom-storage-server.js "$H/assert.js" "$S/57-field-companion.js"
 run the-undercroft      dom-storage-server.js "$H/assert.js" "$S/58-the-undercroft.js"
 run mercenary-contract  dom-storage-server.js "$H/assert.js" "$S/59-mercenary-contract.js"
+run energy              dom-storage-server.js "$H/assert.js" "$S/60-energy.js"
 
 echo
 echo "================ $pass_total passed, $fail_total failed ================"

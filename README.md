@@ -304,6 +304,21 @@ never mint a permanent Battle-Forged Bond or a permanent Doctrine kill-leader
 credit for a species you never actually recruited — only the element it
 fought with reaches Rustbound intel, same as any real deployment.
 
+**Energy.** A second account-level resource sitting right alongside Commander
+Rank — it lives on the device, not any one legion, so starting a new legion,
+prestiging into a Rebirth, or wiping a save slot never touches it. A full
+tank holds 100, and every fight that actually advances or defends the
+campaign — an ordinary stage battle, a Redeployment, a Campaign Map Detour,
+or a trip into the Undercroft — costs 5, with 5 more regenerating every real
+hour that passes, ticked lazily whenever the Hub, Redeployment or Campaign
+Map screen renders rather than on a timer. A full tank is exactly 20 campaign
+battles, and it never banks up while already full, so a week away doesn't
+buy an instant refill the moment it ticks again. Duels, Raids, the World
+Boss, Guild War sorties and Trials are untouched, so there's always
+something to do even at zero — each of those already runs its own separate
+difficulty or scoring layer, the same boundary Mercenary Contract eligibility
+already draws.
+
 **Trophy Case.** A pure-fluff Hub screen that lays out the legion's best moments side
 by side — deepest Reach, longest win streak, the toughest Ace and Vanguard ever felled,
 and a per-theory tally of Archive findings. Deepest Reach and the Archive already kept
@@ -424,7 +439,7 @@ node tests/run.js      # any platform, needs only node
 ./tests/run.sh         # same thing, if you prefer bash
 ```
 
-2931 assertions, no dependencies beyond `node`. The suites extract the script out of
+3013 assertions, no dependencies beyond `node`. The suites extract the script out of
 `gridlegion.html` and run it against stub harnesses — a fake DOM, a fake
 `localStorage`, and a fake Supabase that models RLS, token expiry, capped writes and
 network failure. Nothing touches a real network.

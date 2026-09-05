@@ -279,6 +279,7 @@
   .black-market-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .undercroft-banner{ font-size:16px; color:var(--wind); border:1px dashed var(--wind); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(183,157,255,0.10); }
   .mercenary-banner{ font-size:16px; color:var(--earth); border:1px dashed var(--earth); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(214,162,92,0.10); }
+  .energy-banner{ font-size:16px; color:var(--volt); border:1px dashed var(--volt); padding:8px; margin-bottom:10px; line-height:1.4; box-shadow: inset 0 0 12px rgba(245,230,76,0.10); }
   .threat-banner{ font-size:16px; color:var(--danger); border:1px dashed var(--danger); padding:8px; line-height:1.4; box-shadow: inset 0 0 12px rgba(255,51,102,0.08); }
   .gauge-wrap{ margin-bottom:12px; }
   .gauge-label{ font-size:14px; color:var(--gold); margin-bottom:3px; }
@@ -1107,15 +1108,17 @@ function hireMercenary(speciesId){
   autosave();
   render();
 }
-/* Same exclusion list Reinforcements uses for fairness/scope (a Duel is a
-   formation-vs-formation fair fight, raids/World Boss/Guild War and Trials
-   each already run their own separate difficulty/scoring layer, and the
-   tutorial is a fixed scripted scouting pair) — minus Reinforcements' own
-   boss exclusion, since a mercenary stands in the line from round one
-   rather than being sprung mid-fight. */
-function mercenaryEligibleBattle(){
+/* Which battles count as "the campaign" — shared by Mercenary Contract and
+   Energy (see ENERGY below). Same exclusion list Reinforcements uses for
+   fairness/scope (a Duel is a formation-vs-formation fair fight, raids/
+   World Boss/Guild War and Trials each already run their own separate
+   difficulty/scoring layer, and the tutorial is a fixed scripted scouting
+   pair) — minus Reinforcements' own boss exclusion, which doesn't apply to
+   either mechanic here. */
+function isCampaignBattle(){
   return !state.duel && !state.raidRun && !state.worldBossRun && !state.guildWarRun && !state.trial && !tutorialActive();
 }
+function mercenaryEligibleBattle(){ return isCampaignBattle(); }
 /* Built the same way buildPlayerUnits() builds a real monster's unit —
    right down to running it through newMonster()/computeStats() — except
    this monster is never pushed to state.roster, and its base stats get the
@@ -4106,6 +4109,7 @@ let hubTab = 'legion';
 function renderHub(){
   ensureAttendance();
   checkBadgeUnlocks();
+  tickEnergy(Date.now());
   const story = storyForStage(state.stage);
   const terrain = terrainForStage(state.stage);
   const deep = isDeep(state.stage);
@@ -4195,6 +4199,9 @@ function renderHub(){
   <div class="panel">
     <h2 class="section">${deep ? `THE DEEP — DEPTH ${deepDepth(state.stage)}` : `STAGE ${state.stage} / ${CAMPAIGN_LENGTH}`}</h2>
     <div class="storytext">${story}</div>
+    <div class="energy-banner">⚡ <b>ENERGY</b> ${energy.current}/${ENERGY_MAX}${energy.current<ENERGY_MAX?` — next +${ENERGY_REGEN_PER_HOUR} in ${energyMinutesToNextTick()}m`:' (full)'}
+      <div class="gauge-bg" style="margin-top:4px;"><div class="gauge-fill" style="width:${energyPct()}%; background:var(--volt);"></div></div>
+    </div>
     ${bossDef ? bossBannerHtml(bossDef) : ''}
     ${elite ? `<div class="elite-banner">☠ <b>ELITE WAVE</b> — reinforced Rustbound (+25% stats). Survive it and the wreckage yields double salvage and a guaranteed recruit.</div>` : ''}
     <div class="terrain-banner">🗺 TERRAIN: <b>${terrain.name}</b> — ${terrain.desc}</div>
@@ -4212,7 +4219,8 @@ function renderHub(){
     </div>` : ''}
     ${undercroftAvailable() ? `<div class="undercroft-banner">☣ <b>THE UNDERCROFT</b><br>
       Your legion's own corruption has opened a way down — a much tougher fight waits below. Win it once and earn a permanent Corruption Ward.<br>
-      <button class="btn small" style="margin-top:4px; border-color:var(--wind); color:var(--wind);" onclick="beginUndercroft()">Descend</button>
+      <button class="btn small" style="margin-top:4px; border-color:var(--wind); color:var(--wind);" ${hasEnergyFor(ENERGY_COST_PER_BATTLE)?'':'disabled'} onclick="beginUndercroft()">Descend</button>
+      ${hasEnergyFor(ENERGY_COST_PER_BATTLE)?'':`<span class="dim"> — needs ${ENERGY_COST_PER_BATTLE} energy (have ${energy.current}).</span>`}
     </div>` : ''}
     ${mercenaryPendingText() ? `<div class="mercenary-banner">🗡️ <b>MERCENARY CONTRACT</b><br>
       ${mercenaryPendingText()}
@@ -4235,8 +4243,8 @@ function renderHub(){
     </div>
   </div>
   <div class="panel" style="text-align:center;">
-    <button class="btn primary" style="font-size:24px;" ${filled===0?'disabled':''} onclick="goGambitOrBattle()">⚡ DEPLOY TO BATTLE ⚡</button>
-    ${filled===0?'<p class="dim">Assign at least one monster to your formation first.</p>':''}
+    <button class="btn primary" style="font-size:24px;" ${(filled===0||!hasEnergyFor(ENERGY_COST_PER_BATTLE))?'disabled':''} onclick="goGambitOrBattle()">⚡ DEPLOY TO BATTLE ⚡</button>
+    ${filled===0?'<p class="dim">Assign at least one monster to your formation first.</p>':(!hasEnergyFor(ENERGY_COST_PER_BATTLE)?`<p class="dim">Not enough energy — this costs ${ENERGY_COST_PER_BATTLE}, you have ${energy.current}. Regenerates ${ENERGY_REGEN_PER_HOUR}/hour.</p>`:'')}
     ${winStreakLevel()>0?`<p class="dim">🔥 ${winStreakLevel()} in a row — Legion Gauge charges ${Math.round(WIN_STREAK_GAUGE_PER*winStreakLevel()*100)}% faster, salvage odds +${Math.round(WIN_STREAK_SALVAGE_PER*winStreakLevel()*100)}%.</p>`:''}
   </div>`;
 }
@@ -5092,6 +5100,7 @@ function endTrial(){
    swap-and-restore Trials already established with stageBeforeTrial. */
 function goRedeploy(){ state.screen='redeploy'; state.redeployPick=null; render(); }
 function renderRedeploy(){
+  tickEnergy(Date.now());
   const list = clearedStages();
   if(!list.length){
     return `
@@ -5114,14 +5123,15 @@ function renderRedeploy(){
     <p class="dim">Re-fight any stage you've already cleared, at its own ordinary difficulty — full EXP, a real shot at a recruit, normal salvage. No handicap, no bonus haul, and it never touches your place at the frontier. Good ground to season a fresh recruit before you throw them at the real fight.</p>
     <div class="dim" style="margin-top:8px;">Stage</div>
     <div class="row">${stageBtns}</div>
-    <button class="btn primary" style="margin-top:12px;" ${filled?'':'disabled'} onclick="beginRedeploy()">🔁 REDEPLOY TO ${isDeep(pick.stage)?'DEPTH '+deepDepth(pick.stage):'STAGE '+pick.stage}</button>
+    <button class="btn primary" style="margin-top:12px;" ${(filled && hasEnergyFor(ENERGY_COST_PER_BATTLE))?'':'disabled'} onclick="beginRedeploy()">🔁 REDEPLOY TO ${isDeep(pick.stage)?'DEPTH '+deepDepth(pick.stage):'STAGE '+pick.stage}</button>
+    ${(filled && !hasEnergyFor(ENERGY_COST_PER_BATTLE))?`<p class="dim">Needs ${ENERGY_COST_PER_BATTLE} energy — you have ${energy.current}.</p>`:''}
   </div>
   <div class="panel footer-nav"><button class="btn" onclick="state.screen='hub'; render();">← Back to Hub</button></div>`;
 }
 function pickRedeployStage(n){ state.redeployPick = { stage:n }; render(); }
 function beginRedeploy(){
   const pick = state.redeployPick;
-  if(!pick || clearedStages().indexOf(pick.stage)<0) return;
+  if(!pick || clearedStages().indexOf(pick.stage)<0 || !hasEnergyFor(ENERGY_COST_PER_BATTLE)) return;
   state.redeploy = { stage: pick.stage };
   state.stageBeforeRedeploy = state.stage;
   state.stage = pick.stage;
@@ -5157,7 +5167,7 @@ function redeployFromMap(n){
 }
 function beginDetour(id){
   const det = CAMPAIGN_DETOURS.find(d=>d.id===id);
-  if(!det || !detourAvailable(det)) return;
+  if(!det || !detourAvailable(det) || !hasEnergyFor(ENERGY_COST_PER_BATTLE)) return;
   state.detour = { id: det.id };
   state.stageBeforeDetour = state.stage;
   state.stage = det.afterStage;
@@ -5173,7 +5183,7 @@ function endDetour(){
   render();
 }
 function beginUndercroft(){
-  if(!undercroftAvailable()) return;
+  if(!undercroftAvailable() || !hasEnergyFor(ENERGY_COST_PER_BATTLE)) return;
   state.undercroft = true;
   state.stageBeforeUndercroft = state.stage;
   state.stage = UNDERCROFT_ANCHOR_STAGE;
@@ -5189,6 +5199,7 @@ function endUndercroft(){
   render();
 }
 function renderCampaignMap(){
+  tickEnergy(Date.now());
   const n = CAMPAIGN_LENGTH, spineY = 46, leftX = 40, rightX = 600;
   const stepX = (rightX-leftX) / (n-1);
   const here = !isDeep(state.stage) ? state.stage : null;
@@ -5237,7 +5248,8 @@ function renderCampaignMap(){
       <h2 class="section">🧭 ${escapeHtml(sel.name)}</h2>
       <p class="dim">${escapeHtml(sel.desc)}</p>
       <p class="dim" style="font-size:14px;">Off Stage ${sel.afterStage} — a tougher fight than that wave was. Reward: <b>${claimed?'already claimed':(avail?escapeHtml(sel.rewardDesc):'??? — clear Stage '+sel.afterStage+' first')}</b></p>
-      ${avail?`<button class="btn primary" onclick="beginDetour('${sel.id}')">🧭 TAKE THE DETOUR</button>`:''}
+      ${avail?`<button class="btn primary" ${hasEnergyFor(ENERGY_COST_PER_BATTLE)?'':'disabled'} onclick="beginDetour('${sel.id}')">🧭 TAKE THE DETOUR</button>`:''}
+      ${(avail && !hasEnergyFor(ENERGY_COST_PER_BATTLE))?`<p class="dim">Needs ${ENERGY_COST_PER_BATTLE} energy — you have ${energy.current}.</p>`:''}
       ${claimed?`<p class="dim">✓ Claimed — the map remembers, even after a Rebirth.</p>`:''}
       ${locked?`<p class="dim">Not open yet.</p>`:''}
     </div>`;
@@ -7006,6 +7018,7 @@ function rollGambitChoices(){
   state.gambit = { stage: state.stage, choices, picked: null };
 }
 function goGambitOrBattle(){
+  if(!hasEnergyFor(ENERGY_COST_PER_BATTLE)) return;
   if(augmentOfferPending()){
     rollAugmentChoices();
     state.screen = 'augment';
@@ -7115,6 +7128,11 @@ function renderAugmentDraft(){
 }
 
 function beginBattle(){
+  // Energy: charged the instant a campaign battle actually begins. Every
+  // caller already refused before reaching this point if energy fell
+  // short (see goGambitOrBattle/beginRedeploy/beginDetour/beginUndercroft),
+  // so this is expected to always succeed in practice.
+  if(isCampaignBattle()) spendEnergy(ENERGY_COST_PER_BATTLE);
   const terrain = terrainForStage(state.stage);
   const adapted = currentAdaptation();
   // Hardened Steel plates against your strongest element even before the
@@ -8461,6 +8479,83 @@ function endBattle(result){
   if(result==='win' && state.lastResult && state.lastResult.levelled && state.lastResult.levelled.length) setTimeout(()=>sfx('levelup'), 700);
   musicStop();
   render();
+}
+
+/* ================= ENERGY =================
+   A second account-level resource, right alongside Commander Rank below:
+   lives OUTSIDE any save slot, in its own localStorage key, so restarting
+   a legion, prestiging into a Rebirth, or wiping a slot never touches it
+   — this is the player's own energy on this device, not any one legion's.
+
+   Regeneration is a pure function of real elapsed time, recomputed on
+   demand at a small number of fixed choke points (tickEnergy's call sites:
+   the top of renderHub/renderRedeploy/renderCampaignMap) — never a
+   setInterval, same convention the Scavenger Caravan and Black Market
+   clocks already use. Energy accrues in whole-hour batches: lastUpdate
+   only ever advances by a whole multiple of one hour, so a fractional
+   hour of progress already earned is never silently discarded by an
+   awkwardly-timed tick, and it never banks up while already full (see the
+   early branch in tickEnergy) — sitting at max for a week doesn't let the
+   next spend refill instantly the moment it ticks again.
+
+   Every fight that actually advances or defends the campaign — an
+   ordinary stage battle, a Redeployment, a Campaign Map Detour, or a trip
+   into the Undercroft — costs energy, gated at the natural entry point
+   for each (goGambitOrBattle/beginRedeploy/beginDetour/beginUndercroft),
+   as one more condition on the same "refuse first, mutate nothing" guard
+   clause those functions already open with — no separate message state to
+   juggle, since each screen already computes its own button's disabled
+   state and explanatory text live, the same way an empty formation or an
+   unclaimed Detour already does. Duels, raids, the World Boss, Guild War
+   sorties and Trials are untouched — see isCampaignBattle() above — so
+   there's always something to do even at zero energy. */
+const ENERGY_KEY = 'gridlegion.v1.energy';
+const ENERGY_MAX = 100;
+const ENERGY_REGEN_PER_HOUR = 5;    // one battle's worth of energy back every hour
+const ENERGY_COST_PER_BATTLE = 5;   // a full tank is exactly 20 campaign battles
+function loadStoredEnergy(){
+  if(!hasStorage()) return null;
+  try{
+    const raw = window.localStorage.getItem(ENERGY_KEY);
+    if(!raw) return null;
+    const d = JSON.parse(raw);
+    if(!d || typeof d.current!=='number' || !isFinite(d.current) || typeof d.lastUpdate!=='number' || !isFinite(d.lastUpdate)) return null;
+    return { current: Math.max(0, Math.min(ENERGY_MAX, Math.round(d.current))), lastUpdate: d.lastUpdate };
+  }catch(e){ return null; }
+}
+function saveStoredEnergy(){
+  if(!hasStorage()) return;
+  try{ window.localStorage.setItem(ENERGY_KEY, JSON.stringify({ current: energy.current, lastUpdate: energy.lastUpdate })); }
+  catch(e){ /* a browser that refuses storage just means this device won't remember energy between sessions */ }
+}
+let energy = loadStoredEnergy() || { current: ENERGY_MAX, lastUpdate: Date.now() };
+/* The only mutator of energy.current via regen. Whole-hour batches only —
+   a partial hour is simply left for the next call to pick up from exactly
+   where this one left off, via lastUpdate. */
+function tickEnergy(nowMs){
+  if(energy.current>=ENERGY_MAX){ energy.lastUpdate = nowMs; return; }
+  const elapsedMs = nowMs - energy.lastUpdate;
+  if(elapsedMs<3600000) return;
+  const wholeHours = Math.floor(elapsedMs / 3600000);
+  energy.current = Math.min(ENERGY_MAX, energy.current + wholeHours*ENERGY_REGEN_PER_HOUR);
+  energy.lastUpdate += wholeHours * 3600000;
+  saveStoredEnergy();
+}
+function energyPct(){ return Math.max(0, Math.min(100, Math.round((energy.current/ENERGY_MAX)*100))); }
+function hasEnergyFor(cost){ return energy.current >= cost; }
+function spendEnergy(cost){
+  if(!hasEnergyFor(cost)) return false;
+  energy.current = Math.max(0, energy.current - cost);
+  saveStoredEnergy();
+  return true;
+}
+/* Minutes until the next whole-hour batch lands — always <=60, since
+   lastUpdate is only ever behind "now" by less than one full hour once
+   tickEnergy has caught up. */
+function energyMinutesToNextTick(){
+  if(energy.current>=ENERGY_MAX) return 0;
+  const msLeft = 3600000 - ((Date.now() - energy.lastUpdate) % 3600000);
+  return Math.max(1, Math.ceil(msLeft/60000));
 }
 
 /* ================= COMMANDER RANK =================
